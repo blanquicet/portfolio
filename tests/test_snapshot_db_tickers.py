@@ -29,13 +29,22 @@ def test_load_ticker_map_returns_isin_to_ticker(db):
     db.execute("INSERT INTO ticker_mappings VALUES ('FR0000121014','XPAR','MC.PA','EUR','auto','2024-01-01')")
     db.commit()
     result = load_ticker_map_from_db(db)
-    assert result[("IE00B4L5Y983", "XLON")] == "IWDA.L"
-    assert result[("FR0000121014", "XPAR")] == "MC.PA"
+    assert result["IE00B4L5Y983"] == "IWDA.L"
+    assert result["FR0000121014"] == "MC.PA"
 
 
 def test_load_ticker_map_empty_db(db):
     result = load_ticker_map_from_db(db)
     assert result == {}
+
+
+def test_load_ticker_map_prefers_manual_over_auto(db):
+    db.execute("INSERT INTO ticker_mappings VALUES ('IE00B4L5Y983','XNAS','IWDA_AUTO','USD','auto','2024-01-01')")
+    db.execute("INSERT INTO ticker_mappings VALUES ('IE00B4L5Y983','XLON','IWDA.L','USD','manual','2024-01-01')")
+    db.commit()
+    result = load_ticker_map_from_db(db)
+    # manual entry should win
+    assert result["IE00B4L5Y983"] == "IWDA.L"
 
 
 def test_no_ticker_map_in_snapshot_module():

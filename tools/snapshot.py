@@ -30,17 +30,17 @@ DB = os.path.join(os.path.dirname(__file__), "..", "portfolio.db")
 
 def load_ticker_map_from_db(conn) -> dict:
     """
-    Load {(isin, exchange): ticker} from ticker_mappings.
-    Ordered so manual entries take precedence over auto-resolved ones.
+    Load {isin: ticker} from ticker_mappings.
+    Prefers source='manual' over 'auto' when multiple entries exist for the same ISIN.
     """
     rows = conn.execute(
-        "SELECT isin, exchange, ticker FROM ticker_mappings "
-        "ORDER BY isin, exchange, CASE source WHEN 'manual' THEN 0 ELSE 1 END"
+        "SELECT isin, ticker FROM ticker_mappings "
+        "ORDER BY CASE source WHEN 'manual' THEN 1 ELSE 0 END"
     ).fetchall()
-    # Last write wins per (isin, exchange) — manual entries ordered last so they overwrite auto
+    # Last write wins per isin — manual entries ordered last so they overwrite auto
     result = {}
     for row in rows:
-        result[(row[0], row[1])] = row[2]
+        result[row[0]] = row[1]
     return result
 
 
@@ -49,7 +49,6 @@ SELECT
   s.isin,
   s.name                                                            AS security,
   s.currency                                                        AS db_ccy,
-  t.exchange                                                        AS exchange,
   ROUND(SUM(
     CASE WHEN t.type IN ('buy','vesting','transfer_in') THEN  t.quantity
          WHEN t.type IN ('sell','sell_to_cover','transfer_out') THEN -t.quantity
@@ -59,22 +58,21 @@ FROM transactions t
 JOIN securities s ON s.id = t.security_id
 WHERE t.date <= date('now')
   {broker_filter}
-GROUP BY s.id, s.isin, s.name, s.currency, t.exchange
+GROUP BY s.id, s.isin, s.name, s.currency
 HAVING net_qty > 0.001
 ORDER BY s.currency DESC, s.name;
 """
 
 
-def fetch_prices(isins_with_exchange: list, ticker_map: dict) -> tuple:
+def fetch_prices(isins: list, ticker_map: dict) -> tuple:
     """
-    isins_with_exchange: list of (isin, exchange) tuples
-    ticker_map: {(isin, exchange): ticker}
+    isins: list of isin strings
+    ticker_map: {isin: ticker}
     Returns:
         prices  : {isin: price_in_usd}
         display : {isin: (price_native, yahoo_ccy)}
         fx      : {'EURUSD': float}
     """
-    # FX rates — only EUR/USD needed (no GBP positions)
     fx_data = yf.download(
         ["EURUSD=X"], period="2d", progress=False, auto_adjust=True
     )
@@ -86,36 +84,18 @@ def fetch_prices(isins_with_exchange: list, ticker_map: dict) -> tuple:
         print(f"  ⚠  yfinance: could not fetch EUR/USD — using fallback 1.12 (may be stale)",
               file=sys.stderr)
 
-    # Build ticker list from (isin, exchange) pairs
-    isin_to_ticker = {}
-    for isin, exchange in isins_with_exchange:
-        key = (isin, exchange)
-        if key in ticker_map:
-            isin_to_ticker[isin] = ticker_map[key]
-        else:
-            # Fallback: try any entry for this ISIN (prefer manual over auto)
-            fallback = None
-            for (k_isin, k_exch), ticker in ticker_map.items():
-                if k_isin == isin:
-                    fallback = ticker
-                    break
-            if fallback:
-                isin_to_ticker[isin] = fallback
-
+    isin_to_ticker = {i: ticker_map[i] for i in isins if i in ticker_map}
     all_tickers = list(set(isin_to_ticker.values()))
 
     if not all_tickers:
         return {}, {}, fx
 
-    # Batch download
     raw = yf.download(all_tickers, period="2d", progress=False, auto_adjust=True)
     closes_raw = raw["Close"] if not raw.empty else None
 
-    # Per-ticker: get last price and Yahoo currency
     ticker_price = {}
     ticker_ccy   = {}
     for t in all_tickers:
-        # Price from batch download
         try:
             if closes_raw is not None:
                 col = closes_raw[t] if hasattr(closes_raw, "__getitem__") else closes_raw
@@ -123,10 +103,8 @@ def fetch_prices(isins_with_exchange: list, ticker_map: dict) -> tuple:
                 ticker_price[t] = float(last.iloc[-1])
         except Exception:
             pass
-        # Currency from info (single call per ticker — only for ones not cached)
         try:
             info = yf.Ticker(t).fast_info
-            # fast_info has 'currency' in newer yfinance
             ccy = getattr(info, "currency", None)
             if ccy is None:
                 ccy = yf.Ticker(t).info.get("currency", "USD")
@@ -134,7 +112,6 @@ def fetch_prices(isins_with_exchange: list, ticker_map: dict) -> tuple:
         except Exception:
             ticker_ccy[t] = "USD"
 
-    # Map back isin → USD price + display info
     prices  = {}
     display = {}
     for isin, ticker in isin_to_ticker.items():
@@ -149,11 +126,11 @@ def fetch_prices(isins_with_exchange: list, ticker_map: dict) -> tuple:
         else:
             print(f"  ⚠  {ticker}: unexpected currency '{yahoo_ccy}' from Yahoo — using raw price as USD (likely wrong)",
                   file=sys.stderr)
-            price_usd = raw_price  # fallback
+            price_usd = raw_price
         prices[isin]  = price_usd
         display[isin] = (raw_price, yahoo_ccy)
 
-    unmapped = [isin for isin, _ in isins_with_exchange if isin not in isin_to_ticker]
+    unmapped = [i for i in isins if i not in ticker_map]
     if unmapped:
         print(f"  ⚠  No ticker for {len(unmapped)} ISINs (positions likely closed).",
               file=sys.stderr)
@@ -174,7 +151,6 @@ def run(broker=None):
             sys.exit(1)
 
     if broker:
-        bf_inner = "AND t2.broker = ?"
         rows = conn.execute(
             SQL.format(broker_filter="AND t.broker = ?"), (broker,)
         ).fetchall()
@@ -188,9 +164,8 @@ def run(broker=None):
 
     title = f"broker: {broker.upper()}" if broker else "all brokers"
     print(f"\n  Fetching live prices…", end=" ", flush=True)
-    isins_with_exchange = [(r["isin"], r["exchange"] or "") for r in rows]
     isins = [r["isin"] for r in rows]
-    prices, display_map, fx = fetch_prices(isins_with_exchange, ticker_map)
+    prices, display_map, fx = fetch_prices(isins, ticker_map)
     eurusd = fx["EURUSD"]
     print(f"done  (EUR/USD {eurusd:.4f})")
 
