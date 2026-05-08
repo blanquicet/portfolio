@@ -19,9 +19,10 @@ Fuentes FX:
   - EUR/COP: EUR/USD × TRM (derivado)
 
 Usage:
-    python3 tools/tax_report.py           # año fiscal por defecto: 2025
-    python3 tools/tax_report.py 2024      # otro año
-    python3 tools/tax_report.py --detail  # muestra lotes FIFO individuales
+    python3 tools/tax_report.py 2025              # tabla exógena (modo por defecto)
+    python3 tools/tax_report.py 2024              # otro año (tabla)
+    python3 tools/tax_report.py 2025 --summary    # vista resumida (no tabla)
+    python3 tools/tax_report.py 2025 --detail     # agrega detalle de lotes
 """
 import sqlite3, sys, os
 from datetime import datetime
@@ -32,7 +33,7 @@ DB = os.path.join(os.path.dirname(__file__), "..", "portfolio.db")
 
 YEAR = None
 DETAIL = False
-TABLE = False
+TABLE = True
 SHOW_STC = False
 FILTER = None   # None = todo, "ocasional", "ordinaria"
 for arg in sys.argv[1:]:
@@ -40,6 +41,8 @@ for arg in sys.argv[1:]:
         DETAIL = True
     elif arg == "--table":
         TABLE = True
+    elif arg == "--summary":
+        TABLE = False
     elif arg == "--show-stc":
         SHOW_STC = True
     elif arg in ("--ocasional", "--ordinaria"):
@@ -48,8 +51,9 @@ for arg in sys.argv[1:]:
         YEAR = int(arg)
 
 if YEAR is None:
-    print("Uso: python3 tools/tax_report.py <año> [--table] [--detail] [--ocasional] [--ordinaria] [--show-stc]")
-    print("  Ej: python3 tools/tax_report.py 2025 --table")
+    print("Uso: python3 tools/tax_report.py <año> [--summary|--table] [--detail] [--ocasional] [--ordinaria] [--show-stc]")
+    print("  Ej: python3 tools/tax_report.py 2025")
+    print("  Ej: python3 tools/tax_report.py 2025 --summary")
     sys.exit(1)
 
 DIAS_LARGO_PLAZO = 730  # > 730 días = Ganancia Ocasional Colombia
