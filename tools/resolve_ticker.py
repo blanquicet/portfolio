@@ -38,15 +38,21 @@ MIC_ALIASES = {
 
 
 def normalize_exchange(raw: str) -> str:
-    """Map broker abbreviation → ISO MIC. Unknown values are uppercased with a warning."""
+    """Map broker abbreviation → ISO MIC. Exits 2 if exchange is unrecognized."""
     upper = raw.upper()
-    result = MIC_ALIASES.get(upper, upper)
-    if result == upper and upper not in MIC_ALIASES.values():
+    result = MIC_ALIASES.get(upper)
+    if result is None:
         print(
-            f"  ⚠  Exchange '{raw}' is not a known ISO MIC code. "
-            f"Proceeding as '{upper}' — verify it's correct.",
+            f"ERROR: Exchange '{raw}' is not a recognized ISO MIC code.\n"
+            f"Known exchanges: {', '.join(sorted(set(MIC_ALIASES.values())))}",
             file=sys.stderr
         )
+        print(
+            "HINT: Ask the user which exchange from the list above matches their broker's label, "
+            "then re-call with that exchange.",
+            file=sys.stderr
+        )
+        sys.exit(2)
     return result
 
 

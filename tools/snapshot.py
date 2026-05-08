@@ -29,9 +29,19 @@ DB = os.path.join(os.path.dirname(__file__), "..", "portfolio.db")
 
 
 def load_ticker_map_from_db(conn) -> dict:
-    """Load {(isin, exchange): ticker} from ticker_mappings table."""
-    rows = conn.execute("SELECT isin, exchange, ticker FROM ticker_mappings").fetchall()
-    return {(row[0], row[1]): row[2] for row in rows}
+    """
+    Load {(isin, exchange): ticker} from ticker_mappings.
+    Ordered so manual entries take precedence over auto-resolved ones.
+    """
+    rows = conn.execute(
+        "SELECT isin, exchange, ticker FROM ticker_mappings "
+        "ORDER BY isin, exchange, CASE source WHEN 'manual' THEN 0 ELSE 1 END"
+    ).fetchall()
+    # Last write wins per (isin, exchange) — manual entries ordered last so they overwrite auto
+    result = {}
+    for row in rows:
+        result[(row[0], row[1])] = row[2]
+    return result
 
 
 SQL = """
@@ -39,25 +49,17 @@ SELECT
   s.isin,
   s.name                                                            AS security,
   s.currency                                                        AS db_ccy,
+  t.exchange                                                        AS exchange,
   ROUND(SUM(
     CASE WHEN t.type IN ('buy','vesting','transfer_in') THEN  t.quantity
          WHEN t.type IN ('sell','sell_to_cover','transfer_out') THEN -t.quantity
          ELSE 0 END
-  ), 4)                                                             AS net_qty,
-  (SELECT t2.exchange
-   FROM transactions t2
-   WHERE t2.security_id = s.id
-     AND t2.exchange IS NOT NULL
-     AND t2.date <= date('now')
-     {broker_filter_inner}
-   GROUP BY t2.exchange
-   ORDER BY COUNT(*) DESC
-   LIMIT 1)                                                         AS exchange
+  ), 4)                                                             AS net_qty
 FROM transactions t
 JOIN securities s ON s.id = t.security_id
 WHERE t.date <= date('now')
   {broker_filter}
-GROUP BY s.id, s.isin, s.name, s.currency
+GROUP BY s.id, s.isin, s.name, s.currency, t.exchange
 HAVING net_qty > 0.001
 ORDER BY s.currency DESC, s.name;
 """
@@ -174,13 +176,10 @@ def run(broker=None):
     if broker:
         bf_inner = "AND t2.broker = ?"
         rows = conn.execute(
-            SQL.format(broker_filter_inner=bf_inner, broker_filter="AND t.broker = ?"),
-            (broker, broker)
+            SQL.format(broker_filter="AND t.broker = ?"), (broker,)
         ).fetchall()
     else:
-        rows = conn.execute(
-            SQL.format(broker_filter_inner="", broker_filter="")
-        ).fetchall()
+        rows = conn.execute(SQL.format(broker_filter="")).fetchall()
 
     # Build FIFO queues before closing connection
     fifo_queues, _ = build_queues(conn)

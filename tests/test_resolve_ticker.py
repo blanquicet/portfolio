@@ -33,9 +33,12 @@ def test_normalize_exchange_pa():
 def test_normalize_exchange_already_mic():
     assert normalize_exchange("XNAS") == "XNAS"
 
-def test_normalize_exchange_unknown_returns_upper():
-    # Unknown aliases are uppercased and passed through
-    assert normalize_exchange("unknown") == "UNKNOWN"
+def test_normalize_exchange_unknown_raises_systemexit():
+    """Unknown exchanges must exit with code 2, not silently pass through."""
+    import pytest
+    with pytest.raises(SystemExit) as exc_info:
+        normalize_exchange("BOGUS_EXCHANGE")
+    assert exc_info.value.code == 2
 
 def test_lookup_db_hit(db):
     db.execute(

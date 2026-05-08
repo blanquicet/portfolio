@@ -51,8 +51,9 @@ def format_trm_fallback_message(missing_dates: list) -> str:
         f"\n⚠  No se pudo obtener TRM automáticamente para: {date_range}\n"
         f"   Descarga manual en:\n"
         f"   {TRM_FALLBACK_DOWNLOAD_URL}\n"
-        f"   → Cambiar a vista 'Tabla' → Seleccionar fechas de interés → Descargar\n"
+        f"   → Cambiar a vista 'Tabla' → Seleccionar fechas de interés → Descargar como CSV\n"
         f"   → Luego correr: python3 tools/load_trm.py <archivo.txt>\n"
+        f"   (load_trm.py acepta el formato de texto de Banrep)\n"
     )
 
 
@@ -171,22 +172,66 @@ def run(dates: list, pairs: list):
                 )
                 print(
                     f"⚠  {from_ccy}/{to_ccy}: {len(missing)} rates missing.\n"
-                    f"   Download from ECB: {ecb_url}\n"
-                    f"   Then run: python3 tools/load_fx.py --dates {','.join(missing)} --pairs {from_ccy}/{to_ccy}\n"
-                    f"   (The ECB CSV will be auto-parsed on next run)"
+                    f"   1. Download CSV from ECB: {ecb_url}\n"
+                    f"   2. Run: python3 tools/load_fx.py --file <downloaded.csv> --pairs {from_ccy}/{to_ccy}"
                 )
 
     conn.close()
     print(f"\n  FX summary: {loaded_total} rates loaded, {len(manual_needed)} pairs need manual action.")
 
 
+def load_from_csv_file(filepath: str, from_ccy: str, to_ccy: str) -> list:
+    """
+    Parse a local ECB-format CSV file.
+    ECB CSV columns: TIME_PERIOD (YYYY-MM-DD), OBS_VALUE (rate).
+    Returns list of (date, from_ccy, to_ccy, rate) tuples.
+    """
+    import csv
+    result = []
+    try:
+        with open(filepath, newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    date = row["TIME_PERIOD"]
+                    rate = float(row["OBS_VALUE"])
+                    result.append((date, from_ccy, to_ccy, rate))
+                except (KeyError, ValueError):
+                    continue
+    except FileNotFoundError:
+        print(f"ERROR: File not found: {filepath}", file=sys.stderr)
+    return result
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dates", required=True, help="Comma-separated ISO dates")
-    parser.add_argument("--pairs", required=True, help="Comma-separated pairs like EUR/USD,USD/COP")
+    parser.add_argument("--dates", help="Comma-separated ISO dates (required without --file)")
+    parser.add_argument("--pairs", help="Comma-separated pairs like EUR/USD,USD/COP (required without --file)")
+    parser.add_argument("--file", help="Local ECB CSV file to ingest (use with --pairs)")
     args = parser.parse_args()
 
-    date_list = [d.strip() for d in args.dates.split(",")]
-    pair_list = [tuple(p.strip().split("/")) for p in args.pairs.split(",")]
-    run(date_list, pair_list)
+    if args.file:
+        if not args.pairs:
+            print("ERROR: --file requires --pairs (e.g. --pairs EUR/USD)", file=sys.stderr)
+            sys.exit(1)
+        pair_list = [tuple(p.strip().split("/")) for p in args.pairs.split(",")]
+        conn = sqlite3.connect(DB)
+        loaded = 0
+        for from_ccy, to_ccy in pair_list:
+            rows = load_from_csv_file(args.file, from_ccy, to_ccy)
+            if rows:
+                insert_rates(conn, rows)
+                loaded += len(rows)
+                print(f"  ✓ {from_ccy}/{to_ccy}: loaded {len(rows)} rates from {args.file}")
+            else:
+                print(f"  ⚠  No rows loaded for {from_ccy}/{to_ccy} from {args.file}")
+        conn.close()
+        print(f"\n  Done: {loaded} total rates loaded.")
+    elif args.dates and args.pairs:
+        date_list = [d.strip() for d in args.dates.split(",")]
+        pair_list = [tuple(p.strip().split("/")) for p in args.pairs.split(",")]
+        run(date_list, pair_list)
+    else:
+        print("ERROR: Provide either (--dates + --pairs) or (--file + --pairs)", file=sys.stderr)
+        sys.exit(1)
