@@ -26,6 +26,14 @@ MIC_ALIASES = {
     "NYSE": "XNYS",
     "XETRA": "XETR",
     "XLON": "XLON", "XNAS": "XNAS", "XNYS": "XNYS", "XETR": "XETR",
+    "AMS": "XAMS", "AS": "XAMS", "XAMS": "XAMS",
+    "BRU": "XBRU", "XBRU": "XBRU",
+    "MI": "XMIL", "MIL": "XMIL", "XMIL": "XMIL",
+    "FRA": "XFRA", "XFRA": "XFRA",
+    "STU": "XSTU", "XSTU": "XSTU",
+    "BM": "XMAD", "BME": "XMAD", "XMAD": "XMAD",
+    "SWX": "XSWX", "VTX": "XSWX", "XSWX": "XSWX",
+    "HEL": "XHEL", "XHEL": "XHEL",
 }
 
 
@@ -47,7 +55,7 @@ def lookup_db(conn, isin: str, exchange: str):
 
 def save_mapping(conn, isin: str, exchange: str, ticker: str, currency: str, source: str):
     """Upsert a row into ticker_mappings."""
-    now = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     conn.execute(
         "INSERT OR REPLACE INTO ticker_mappings (isin, exchange, ticker, currency, source, verified_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
@@ -75,11 +83,16 @@ def yahoo_search(isin: str):
         results = []
         for q in quotes:
             sym = q.get("symbol", "")
+            if not sym:
+                continue
             ccy = q.get("currency", "USD")
             exch = q.get("exchange", "")
             mic = normalize_exchange(exch)
             results.append({"ticker": sym, "currency": ccy, "exchange_mic": mic, "exchange_raw": exch})
         return results
+    except ImportError:
+        print("WARN: 'requests' not installed — Yahoo search skipped. Run: pip install requests", file=sys.stderr)
+        return []
     except Exception:
         return []
 
@@ -122,7 +135,7 @@ def run(isin: str, exchange_raw):
         sys.exit(0)
 
     if len(matching) == 0:
-        # No match for given exchange — show all candidates
+        print(f"INFO: No result for {isin} on {exchange}. Found on other exchanges:", file=sys.stderr)
         matching = candidates
 
     # Ambiguous: print options for skill to present to user
