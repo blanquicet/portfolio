@@ -80,3 +80,13 @@ CREATE TABLE IF NOT EXISTS lot_assignments (
     quantity REAL    NOT NULL CHECK(quantity > 0),
     UNIQUE(sell_id, buy_id)
 );
+
+CREATE TABLE IF NOT EXISTS ticker_mappings (
+    isin         TEXT NOT NULL,
+    exchange     TEXT NOT NULL,   -- ISO MIC: XLON, XPAR, XNAS, XNYS, XETR, etc.
+    ticker       TEXT NOT NULL,
+    currency     TEXT NOT NULL,   -- USD, EUR, GBP, COP
+    source       TEXT NOT NULL CHECK(source IN ('auto', 'manual')),
+    verified_at  TEXT,            -- ISO 8601
+    PRIMARY KEY (isin, exchange)
+);
