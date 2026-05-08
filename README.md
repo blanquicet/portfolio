@@ -17,7 +17,7 @@ git clone https://github.com/blanquicet/portfolio.git
 cd portfolio
 
 # 2. Instalar dependencias
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 
 # 3. Inicializar la base de datos
 # Abre el agente en este directorio y ejecuta:
