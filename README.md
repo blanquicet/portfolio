@@ -7,7 +7,7 @@ Pásale un PDF o screenshot de tu broker al agente — extrae, ingesta y mantien
 ## Requisitos
 
 - Python 3.11+
-- Un agente de IA compatible con slash commands (Claude Code, GitHub Copilot, etc.) con acceso a una API key
+- Un agente de IA compatible con skills (Claude Code, GitHub Copilot, etc.) con acceso a una API key
 
 ## Setup
 
@@ -20,21 +20,46 @@ cd portfolio
 pip3 install -r requirements.txt
 
 # 3. Inicializar la base de datos
-# Abre el agente en este directorio y ejecuta:
-/setup
+# Abre el agente en este directorio y dile:
+# "inicializa el portafolio" o "setup portfolio"
 ```
 
-## Comandos
+## Cómo usarlo
 
-Estos son slash commands — compatibles con Claude Code, GitHub Copilot y otros agentes que soporten skills.
+El agente entiende lenguaje natural. No hay comandos exactos que memorizar — dile lo que quieres hacer:
 
-| Comando | Qué hace |
-|---------|----------|
-| `/setup` | Crea o migra la base de datos |
-| `/ingest` | Ingesta transacciones desde un PDF o screenshot |
-| `/snapshot` | Muestra posiciones actuales con precios live y P&L |
-| `/snapshot ibkr` | Snapshot filtrado por broker |
-| `/tax 2024` | Reporte de renta para el año fiscal 2024 |
+### Registrar compras y ventas
+
+- "Registra esta compra: compré 10 acciones de AAPL a $150 el 3 de enero"
+- "Ingesta este PDF de IBKR" (adjuntando el archivo)
+- "Procesa este screenshot de Scalable Capital" (adjuntando la imagen)
+- "Vendí 5 participaciones de IWDA.L a £80 el 15 de marzo, comisión £5"
+
+El agente extrae los datos, resuelve los tickers automáticamente y los guarda en la base de datos.
+
+### Ver el portafolio actual
+
+- "Muéstrame mi portafolio"
+- "¿Cuánto vale mi portafolio hoy?"
+- "¿Cuál es mi P&L en MSFT?"
+- "Ver posiciones de IBKR"
+
+O directamente desde la terminal:
+
+```bash
+python3 tools/snapshot.py
+```
+
+### Reporte de impuestos
+
+- "Genera el reporte de renta para 2024"
+- "¿Cuánto debo declarar en impuestos por el año 2023?"
+
+O directamente desde la terminal:
+
+```bash
+python3 tools/tax_report.py 2024
+```
 
 ## Reporte de Renta
 
