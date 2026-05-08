@@ -24,8 +24,9 @@ Usage:
     python3 tools/tax_report.py --detail  # muestra lotes FIFO individuales
 """
 import sqlite3, sys, os
-from collections import defaultdict
-from datetime import date, datetime
+from datetime import datetime
+sys.path.insert(0, os.path.dirname(__file__))
+from fifo import fx, to_usd, FifoQueue, build_queues
 
 DB = os.path.join(os.path.dirname(__file__), "..", "portfolio.db")
 
@@ -59,74 +60,13 @@ TOPE_EXOGENA_COP  = TOPE_EXOGENA_UVT * UVT_VAL
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# FX helpers
+# Helpers locales
 # ──────────────────────────────────────────────────────────────────────────────
-
-def fx(conn, from_ccy, to_ccy, dt):
-    """
-    Busca tasa en fx_rates para la fecha exacta.
-    Si no hay (fin de semana / festivo), busca el día hábil anterior más cercano.
-    """
-    row = conn.execute("""
-        SELECT rate FROM fx_rates
-        WHERE from_currency = ? AND to_currency = ? AND date <= ?
-        ORDER BY date DESC LIMIT 1
-    """, (from_ccy, to_ccy, dt)).fetchone()
-    return row[0] if row else None
-
-
-def to_usd(conn, amount, ccy, dt):
-    """Convierte amount en ccy → USD usando tasa histórica."""
-    if ccy == "USD":
-        return amount
-    if ccy == "EUR":
-        rate = fx(conn, "EUR", "USD", dt)
-        return amount * rate if rate else None
-    if ccy == "GBP":
-        rate = fx(conn, "GBP", "USD", dt)
-        return amount * rate if rate else None
-    return None
-
 
 def to_cop(conn, amount_usd, dt):
     """Convierte USD → COP usando TRM del día."""
     trm = fx(conn, "USD", "COP", dt)
     return amount_usd * trm if trm else None
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# FIFO engine
-# ──────────────────────────────────────────────────────────────────────────────
-
-class FifoQueue:
-    """Cola FIFO de lotes de compra para un instrumento."""
-
-    def __init__(self):
-        self.lots = []  # list of [qty_remaining, price_usd, date_str, source]
-
-    def add(self, qty, price_usd, dt, source):
-        self.lots.append([qty, price_usd, dt, source])
-
-    def consume(self, qty_needed):
-        """
-        Consume qty_needed unidades en orden FIFO.
-        Retorna lista de (qty_consumed, price_usd, buy_date, source).
-        """
-        consumed = []
-        remaining = qty_needed
-        for lot in self.lots:
-            if remaining <= 0:
-                break
-            lot_qty, price_usd, buy_date, source = lot
-            if lot_qty <= 0:
-                continue
-            take = min(lot_qty, remaining)
-            consumed.append((take, price_usd, buy_date, source))
-            lot[0] -= take
-            remaining -= take
-        if remaining > 1e-6:
-            raise ValueError(f"FIFO insuficiente: faltan {remaining:.4f} unidades")
-        return consumed
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -137,58 +77,51 @@ def run():
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
 
-    # 1. Cargar todos los movimientos relevantes ordenados cronológicamente
-    rows = conn.execute("""
+    # 1. Construir colas FIFO hasta el 31-dic del año anterior (estado justo
+    #    antes del año fiscal). Las ventas del año se procesan a continuación
+    #    sobre estas colas para calcular ganancias correctamente.
+    prior_year_end = f"{YEAR - 1}-12-31"
+    queues, fifo_errors = build_queues(conn, as_of_date=prior_year_end)
+
+    # 2. Cargar movimientos del año fiscal en orden cronológico
+    year_rows = conn.execute("""
         SELECT
             s.isin, s.name, s.currency AS db_ccy,
             t.id, t.date, t.type, t.broker,
             t.quantity, t.price, t.currency AS t_ccy, t.total, t.fee
         FROM transactions t
         JOIN securities s ON s.id = t.security_id
-        WHERE t.type IN ('buy','vesting','sell','sell_to_cover','transfer_in','transfer_out')
+        WHERE t.type IN ('buy','vesting','sell','sell_to_cover')
+          AND t.date BETWEEN ? AND ?
         ORDER BY t.date, t.id
-    """).fetchall()
+    """, (f"{YEAR}-01-01", f"{YEAR}-12-31")).fetchall()
 
-    # 2. Construir colas FIFO por ISIN
-    #    — transfer_in/out NO crean ni consumen lotes propios:
-    #      el transfer_in hereda los lotes originales (el costo no cambia).
-    #      Solo buy/vesting agregan lotes; sell consume lotes.
-    #      sell_to_cover NO consume lotes FIFO: costo = precio de vest (ganancia = $0).
-    queues = defaultdict(FifoQueue)
-
-    for r in rows:
-        isin  = r["isin"]
-        qty   = r["quantity"]
-        dt    = r["date"]
-        typ   = r["type"]
-        ccy   = r["t_ccy"]
-        total = r["total"]
-        src   = f"{r['broker']} {r['date']} id={r['id']}"
-
-        if typ in ("buy", "vesting"):
-            price_usd = to_usd(conn, total / qty if total and qty else 0, ccy, dt)
-            queues[isin].add(qty, price_usd, dt, src)
-
-        # sell_to_cover, transfer_in, transfer_out: no tocan la cola FIFO
-
-    # 3. Procesar ventas del año fiscal
+    # 3. Procesar año fiscal en orden: agregar buys a cola, reportar ventas
     results = []
     fifo_errors = []
 
-    for r in rows:
-        if r["type"] not in ("sell", "sell_to_cover"):
-            continue
-        if not r["date"].startswith(str(YEAR)):
+    for r in year_rows:
+        isin = r["isin"]
+        qty  = r["quantity"]
+        dt   = r["date"]
+        typ  = r["type"]
+        ccy  = r["t_ccy"]
+        total = r["total"]
+        src  = f"{r['broker']} {dt} id={r['id']}"
+
+        # Buys/vestings dentro del año: agregar a la cola antes de procesar ventas
+        if typ in ("buy", "vesting"):
+            price_usd = to_usd(conn, total / qty if total and qty else 0, ccy, dt)
+            queues[isin].add(qty, price_usd, dt, src)
             continue
 
-        isin       = r["isin"]
+        # sell_to_cover and sell: reportar
         name       = r["name"]
         sell_qty   = r["quantity"]
         sell_date  = r["date"]
-        sell_total = r["total"]       # en moneda original de la venta
+        sell_total = r["total"]
         sell_ccy   = r["t_ccy"]
         fee        = r["fee"] or 0
-        typ        = r["type"]
 
         # Ingreso neto en USD
         ingreso_usd = to_usd(conn, sell_total, sell_ccy, sell_date)

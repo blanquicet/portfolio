@@ -23,6 +23,8 @@ EUR/USD transfer note:
 import sqlite3, sys, os, warnings
 warnings.filterwarnings("ignore")
 import yfinance as yf
+sys.path.insert(0, os.path.dirname(__file__))
+from fifo import build_queues
 
 DB = os.path.join(os.path.dirname(__file__), "..", "portfolio.db")
 
@@ -85,28 +87,7 @@ SELECT
     CASE WHEN t.type IN ('buy','vesting','transfer_in') THEN  t.quantity
          WHEN t.type IN ('sell','sell_to_cover','transfer_out') THEN -t.quantity
          ELSE 0 END
-  ), 4)                                                             AS net_qty,
-  -- avg_cost_usd: each buy converted at its OWN historical EUR/USD rate.
-  -- USD buys: total used directly.
-  -- EUR buys: total × fx_rates EUR/USD on that exact date (COALESCE fallback = live).
-  -- GBP buys: total × fx_rates GBP/USD on that exact date.
-  ROUND(
-    SUM(CASE WHEN t.type IN ('buy','vesting') THEN
-          CASE t.currency
-            WHEN 'USD' THEN t.total
-            WHEN 'EUR' THEN t.total * COALESCE(
-              (SELECT f.rate FROM fx_rates f
-               WHERE f.date = t.date AND f.from_currency='EUR' AND f.to_currency='USD'),
-              1.10)
-            WHEN 'GBP' THEN t.total * COALESCE(
-              (SELECT f.rate FROM fx_rates f
-               WHERE f.date = t.date AND f.from_currency='GBP' AND f.to_currency='USD'),
-              1.27)
-            ELSE t.total
-          END
-        ELSE 0 END) /
-    NULLIF(SUM(CASE WHEN t.type IN ('buy','vesting') THEN t.quantity ELSE 0 END), 0)
-  , 4)                                                              AS avg_cost_usd
+  ), 4)                                                             AS net_qty
 FROM transactions t
 JOIN securities s ON s.id = t.security_id
 WHERE t.date <= date('now')
@@ -200,6 +181,9 @@ def run(broker=None):
     conn.row_factory = sqlite3.Row
     bf = f"AND t.broker = '{broker}'" if broker else ""
     rows = conn.execute(SQL.format(broker_filter=bf)).fetchall()
+
+    # Build FIFO queues before closing connection
+    fifo_queues, _ = build_queues(conn)
     conn.close()
 
     title = f"broker: {broker.upper()}" if broker else "all brokers"
@@ -209,17 +193,20 @@ def run(broker=None):
     eurusd = fx["EURUSD"]
     gbpusd = fx["GBPUSD"]
     print(f"done  (EUR/USD {eurusd:.4f}  GBP/USD {gbpusd:.4f})")
+
     # ── First pass: compute market values for portfolio total
     portfolio_usd = 0.0
     enriched = []
     for r in rows:
-        isin         = r["isin"]
-        qty          = r["net_qty"]
-        avg_cost_usd = r["avg_cost_usd"]   # already in USD (historical FX from DB)
-        db_ccy       = r["db_ccy"]
+        isin     = r["isin"]
+        qty      = r["net_qty"]
+        db_ccy   = r["db_ccy"]
 
         price_usd     = prices.get(isin)
         price_native, yahoo_ccy = display_map.get(isin, (None, None))
+
+        # FIFO avg cost for remaining lots (already in USD, historical FX)
+        avg_cost_usd = fifo_queues[isin].avg_cost_usd() if isin in fifo_queues else None
 
         # Market value in USD
         mkt_val_usd = qty * price_usd if price_usd is not None else None
@@ -231,7 +218,7 @@ def run(broker=None):
             "db_ccy":       db_ccy,
             "yahoo_ccy":    yahoo_ccy,
             "qty":          qty,
-            "avg_cost_usd": avg_cost_usd,  # USD, computed at historical FX rates
+            "avg_cost_usd": avg_cost_usd,  # USD, FIFO cost of remaining lots
             "price_native": price_native,
             "price_usd":    price_usd,
             "mkt_val_usd":  mkt_val_usd,
