@@ -82,10 +82,11 @@ CREATE TABLE IF NOT EXISTS lot_assignments (
 );
 
 CREATE TABLE IF NOT EXISTS ticker_mappings (
+    -- No FK on isin: ticker_mappings may exist before a security is inserted (pre-resolution)
     isin         TEXT NOT NULL,
     exchange     TEXT NOT NULL,   -- ISO MIC: XLON, XPAR, XNAS, XNYS, XETR, etc.
     ticker       TEXT NOT NULL,
-    currency     TEXT NOT NULL,   -- USD, EUR, GBP, COP
+    currency     TEXT NOT NULL,   -- trading currency for this listing (may differ from securities.currency)
     source       TEXT NOT NULL CHECK(source IN ('auto', 'manual')),
     verified_at  TEXT,            -- ISO 8601
     PRIMARY KEY (isin, exchange)
