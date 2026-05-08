@@ -192,7 +192,7 @@ def run(broker=None):
     prices, display_map, fx = fetch_prices(isins)
     eurusd = fx["EURUSD"]
     gbpusd = fx["GBPUSD"]
-    print(f"done  (EUR/USD {eurusd:.4f}  GBP/USD {gbpusd:.4f})")
+    print(f"done  (EUR/USD {eurusd:.4f})")
 
     # ── First pass: compute market values for portfolio total
     portfolio_usd = 0.0
