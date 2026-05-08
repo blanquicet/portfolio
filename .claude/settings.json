@@ -1,0 +1,7 @@
+{
+  "skills": [
+    ".claude/skills/setup.md",
+    ".claude/skills/ingest.md",
+    ".claude/skills/snapshot.md"
+  ]
+}
