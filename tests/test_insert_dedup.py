@@ -64,6 +64,8 @@ def test_find_duplicate_returns_id_on_match(db):
             "broker": "IBKR", "quantity": 10.0, "price": 400.0}
     result = find_duplicate(db, data)
     assert result is not None
+    assert isinstance(result, int)
+    assert result >= 1
 
 
 def test_find_duplicate_different_quantity_no_match(db):

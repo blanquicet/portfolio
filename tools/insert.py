@@ -46,7 +46,7 @@ def upsert_security(data: dict) -> int:
     conn.close()
     return row[0]
 
-def insert_transaction(data: dict) -> int:
+def insert_transaction(data: dict, force: bool = False) -> int:
     conn = get_db()
     # resolve security_id from isin
     row = conn.execute("SELECT id FROM securities WHERE isin = ?", (data["isin"],)).fetchone()
@@ -56,14 +56,15 @@ def insert_transaction(data: dict) -> int:
     sec_id = row[0]
 
     # duplicate check
-    check_data = {**data, "security_id": sec_id}
-    dup_id = find_duplicate(conn, check_data)
-    if dup_id is not None:
-        print(f"  ⚠  Probable duplicate of transaction id={dup_id} "
-              f"({data['date']} {data['type']} {data['quantity']} @ {data.get('price')}). "
-              f"Skipping. Pass --force to insert anyway.", file=sys.stderr)
-        conn.close()
-        sys.exit(2)
+    if not force:
+        check_data = {**data, "security_id": sec_id}
+        dup_id = find_duplicate(conn, check_data)
+        if dup_id is not None:
+            print(f"  ⚠  Probable duplicate of transaction id={dup_id} "
+                  f"({data['date']} {data['type']} {data['quantity']} @ {data.get('price')}). "
+                  f"Skipping. Pass --force to insert anyway.", file=sys.stderr)
+            conn.close()
+            sys.exit(2)
 
     cur = conn.execute(
         "INSERT INTO transactions (security_id, date, type, broker, quantity, price, currency, total, fee, exchange, notes, source_file) "
@@ -103,25 +104,7 @@ if __name__ == "__main__":
         print(f"security_id={sid}")
     elif args.cmd == "transaction":
         data = json.loads(args.arg)
-        if args.force:
-            conn = get_db()
-            row = conn.execute("SELECT id FROM securities WHERE isin = ?", (data["isin"],)).fetchone()
-            if not row:
-                print(f"ERROR: security {data['isin']} not found.", file=sys.stderr)
-                sys.exit(1)
-            cur = conn.execute(
-                "INSERT INTO transactions (security_id, date, type, broker, quantity, price, currency, total, fee, exchange, notes, source_file) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-                (row[0], data["date"], data["type"], data["broker"], data["quantity"],
-                 data.get("price"), data["currency"], data.get("total"),
-                 data.get("fee", 0), data.get("exchange"), data.get("notes"), data.get("source_file"))
-            )
-            tid = cur.fetchone()[0]
-            conn.commit()
-            conn.close()
-            print(f"transaction_id={tid}")
-        else:
-            tid = insert_transaction(data)
-            print(f"transaction_id={tid}")
+        tid = insert_transaction(data, force=args.force)
+        print(f"transaction_id={tid}")
     elif args.cmd == "query":
         run_query(args.arg)
