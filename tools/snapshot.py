@@ -29,9 +29,9 @@ DB = os.path.join(os.path.dirname(__file__), "..", "portfolio.db")
 
 
 def load_ticker_map_from_db(conn) -> dict:
-    """Load {isin: ticker} from ticker_mappings table."""
-    rows = conn.execute("SELECT isin, ticker FROM ticker_mappings").fetchall()
-    return {row[0]: row[1] for row in rows}
+    """Load {(isin, exchange): ticker} from ticker_mappings table."""
+    rows = conn.execute("SELECT isin, exchange, ticker FROM ticker_mappings").fetchall()
+    return {(row[0], row[1]): row[2] for row in rows}
 
 
 SQL = """
@@ -43,7 +43,16 @@ SELECT
     CASE WHEN t.type IN ('buy','vesting','transfer_in') THEN  t.quantity
          WHEN t.type IN ('sell','sell_to_cover','transfer_out') THEN -t.quantity
          ELSE 0 END
-  ), 4)                                                             AS net_qty
+  ), 4)                                                             AS net_qty,
+  (SELECT t2.exchange
+   FROM transactions t2
+   WHERE t2.security_id = s.id
+     AND t2.exchange IS NOT NULL
+     AND t2.date <= date('now')
+     {broker_filter_inner}
+   GROUP BY t2.exchange
+   ORDER BY COUNT(*) DESC
+   LIMIT 1)                                                         AS exchange
 FROM transactions t
 JOIN securities s ON s.id = t.security_id
 WHERE t.date <= date('now')
@@ -54,11 +63,13 @@ ORDER BY s.currency DESC, s.name;
 """
 
 
-def fetch_prices(isins: list, ticker_map: dict) -> tuple:
+def fetch_prices(isins_with_exchange: list, ticker_map: dict) -> tuple:
     """
+    isins_with_exchange: list of (isin, exchange) tuples
+    ticker_map: {(isin, exchange): ticker}
     Returns:
-        prices  : {isin: price_in_usd}   — all values normalised to USD
-        display : {isin: (price_native, yahoo_ccy)}  — for showing native price
+        prices  : {isin: price_in_usd}
+        display : {isin: (price_native, yahoo_ccy)}
         fx      : {'EURUSD': float}
     """
     # FX rates — only EUR/USD needed (no GBP positions)
@@ -73,8 +84,22 @@ def fetch_prices(isins: list, ticker_map: dict) -> tuple:
         print(f"  ⚠  yfinance: could not fetch EUR/USD — using fallback 1.12 (may be stale)",
               file=sys.stderr)
 
-    # Build ticker list
-    isin_to_ticker = {i: ticker_map[i] for i in isins if i in ticker_map}
+    # Build ticker list from (isin, exchange) pairs
+    isin_to_ticker = {}
+    for isin, exchange in isins_with_exchange:
+        key = (isin, exchange)
+        if key in ticker_map:
+            isin_to_ticker[isin] = ticker_map[key]
+        else:
+            # Fallback: try any entry for this ISIN (prefer manual over auto)
+            fallback = None
+            for (k_isin, k_exch), ticker in ticker_map.items():
+                if k_isin == isin:
+                    fallback = ticker
+                    break
+            if fallback:
+                isin_to_ticker[isin] = fallback
+
     all_tickers = list(set(isin_to_ticker.values()))
 
     if not all_tickers:
@@ -126,7 +151,7 @@ def fetch_prices(isins: list, ticker_map: dict) -> tuple:
         prices[isin]  = price_usd
         display[isin] = (raw_price, yahoo_ccy)
 
-    unmapped = [i for i in isins if i not in ticker_map]
+    unmapped = [isin for isin, _ in isins_with_exchange if isin not in isin_to_ticker]
     if unmapped:
         print(f"  ⚠  No ticker for {len(unmapped)} ISINs (positions likely closed).",
               file=sys.stderr)
@@ -147,11 +172,15 @@ def run(broker=None):
             sys.exit(1)
 
     if broker:
+        bf_inner = "AND t2.broker = ?"
         rows = conn.execute(
-            SQL.format(broker_filter="AND t.broker = ?"), (broker,)
+            SQL.format(broker_filter_inner=bf_inner, broker_filter="AND t.broker = ?"),
+            (broker, broker)
         ).fetchall()
     else:
-        rows = conn.execute(SQL.format(broker_filter="")).fetchall()
+        rows = conn.execute(
+            SQL.format(broker_filter_inner="", broker_filter="")
+        ).fetchall()
 
     # Build FIFO queues before closing connection
     fifo_queues, _ = build_queues(conn)
@@ -160,8 +189,9 @@ def run(broker=None):
 
     title = f"broker: {broker.upper()}" if broker else "all brokers"
     print(f"\n  Fetching live prices…", end=" ", flush=True)
+    isins_with_exchange = [(r["isin"], r["exchange"] or "") for r in rows]
     isins = [r["isin"] for r in rows]
-    prices, display_map, fx = fetch_prices(isins, ticker_map)
+    prices, display_map, fx = fetch_prices(isins_with_exchange, ticker_map)
     eurusd = fx["EURUSD"]
     print(f"done  (EUR/USD {eurusd:.4f})")
 

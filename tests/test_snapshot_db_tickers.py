@@ -29,8 +29,8 @@ def test_load_ticker_map_returns_isin_to_ticker(db):
     db.execute("INSERT INTO ticker_mappings VALUES ('FR0000121014','XPAR','MC.PA','EUR','auto','2024-01-01')")
     db.commit()
     result = load_ticker_map_from_db(db)
-    assert result["IE00B4L5Y983"] == "IWDA.L"
-    assert result["FR0000121014"] == "MC.PA"
+    assert result[("IE00B4L5Y983", "XLON")] == "IWDA.L"
+    assert result[("FR0000121014", "XPAR")] == "MC.PA"
 
 
 def test_load_ticker_map_empty_db(db):
