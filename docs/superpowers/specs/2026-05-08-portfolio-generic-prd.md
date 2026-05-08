@@ -1,7 +1,7 @@
 # PRD — Portfolio Tracker Genérico
 
 **Fecha:** 2026-05-08
-**Estado:** Aprobado v2
+**Estado:** Aprobado v3
 **Autor:** Jose Blanquicet + Claude
 
 ---
@@ -90,7 +90,7 @@ La PK es `(isin, exchange)`.
 ```sql
 CREATE TABLE IF NOT EXISTS ticker_mappings (
     isin         TEXT NOT NULL,
-    exchange     TEXT NOT NULL,   -- LSE, PA, NASDAQ, NYSE, XETRA, etc.
+    exchange     TEXT NOT NULL,   -- ISO MIC: XLON, XPAR, XNAS, XNYS, XETR, etc.
     ticker       TEXT NOT NULL,
     currency     TEXT NOT NULL,   -- USD, EUR, GBP, COP, etc.
     source       TEXT NOT NULL CHECK(source IN ('auto', 'manual')),
@@ -99,7 +99,20 @@ CREATE TABLE IF NOT EXISTS ticker_mappings (
 );
 ```
 
-Cuando un ISIN tiene múltiples entradas, la skill de ingestión usa la plaza del broker de origen para seleccionar el ticker correcto.
+**Canon de exchange — ISO MIC obligatorio:**
+El campo `exchange` usa siempre códigos ISO 10383 (MIC). Los brokers suelen traer abreviaciones propias; `resolve_ticker.py` es responsable de normalizar antes de insertar:
+
+| Abreviación broker | MIC canónico |
+|--------------------|--------------|
+| LSE                | XLON         |
+| PA, XPAR           | XPAR         |
+| NASDAQ             | XNAS         |
+| NYSE               | XNYS         |
+| XETRA              | XETR         |
+
+Si el broker no trae exchange (campo nulo o vacío), `resolve_ticker.py` no puede construir la PK → cae directamente a resolución manual: la skill pregunta al usuario en qué bolsa opera el instrumento antes de intentar la búsqueda.
+
+Cuando un ISIN tiene múltiples entradas, la skill de ingestión usa la plaza del broker de origen (ya normalizada a MIC) para seleccionar el ticker correcto.
 
 #### `resolve_ticker.py`
 
@@ -139,6 +152,16 @@ Script de migración para usuarios con DB existente. Responsabilidades:
 
 **Regla de schema:** `schema.sql` define siempre el estado final (para usuarios nuevos). `migrate.py` lleva bases existentes a ese estado. Nunca alterar `schema.sql` para compatibilidad hacia atrás.
 
+**Estrategia de release — orden obligatorio para el mantenedor del repo:**
+El `TICKER_MAP` en `snapshot.py` contiene ISINs del portafolio personal del mantenedor. Si se elimina el map del código antes de migrar la DB, la información nunca llega al repo. El flujo correcto es:
+
+1. Correr `python3 tools/migrate.py` localmente → verifica que `ticker_mappings` quedó populada
+2. Eliminar `TICKER_MAP` de `snapshot.py` (el código ya no lo referencia tras el refactor)
+3. Verificar con `git diff` que ningún ISIN personal queda en el código trackeado
+4. Solo entonces hacer push / publicar el repo
+
+Este orden garantiza que el historial de git nunca contiene el mapa personal (asumiendo que `TICKER_MAP` se introdujo en un commit privado o se squashea antes de publicar).
+
 ---
 
 ## 3. Formatos de Ingestión y Contrato de Datos
@@ -155,13 +178,13 @@ La skill de ingestión no hace parsing directo — Claude lee el documento y est
 ### Esquema normalizado de salida (por transacción)
 
 ```
-isin, name, type (etf/stock/bond/...), currency,  ← security
+isin, name, type (etf/stock/bond/...), security_currency,  ← security
 date, tx_type (buy/sell/dividend/...), broker,
-quantity, price, currency, total, fee, exchange,
+quantity, price, tx_currency, total, fee, exchange,
 notes, source_file
 ```
 
-Este esquema es el contrato entre Claude (extracción) y `insert.py` (persistencia). La skill lo define explícitamente — Claude no improvisa campos.
+Este esquema es el contrato entre Claude (extracción) y `insert.py` (persistencia). La skill lo define explícitamente — Claude no improvisa campos. `security_currency` es la moneda de denominación del instrumento (ej. USD para IWDA.L); `tx_currency` es la moneda de la transacción específica (puede diferir si el broker liquida en otra moneda).
 
 ### Estrategia anti-duplicados
 
@@ -240,7 +263,7 @@ El script es siempre la fuente de verdad
 | **Ingest — ambigüedad de ticker** | ISIN con múltiples plazas → Claude presenta opciones → usuario elige → ticker guardado como `manual` → ingestión completa |
 | **Ingest — fallo TRM** | API Banrep falla → mensaje con URL + pasos manuales → usuario descarga → `load_trm.py` → ingestión completa |
 | **Ingest — reingestión** | Mismo PDF corrido dos veces → segunda vez: "X ya existían, 0 insertadas" sin duplicados |
-| **Snapshot** | Ninguna referencia a `TICKER_MAP` en código → todos los tickers vienen de DB → output idéntico al pre-refactor |
+| **Snapshot** | Ninguna referencia a `TICKER_MAP` en código → todos los tickers vienen de DB → mismas posiciones (ISINs, cantidades, costos FIFO) que pre-refactor; valores de mercado con tolerancia ±1% por precios live |
 | **Tax** | Tax report con lote específico asignado produce resultado correcto → validado contra cálculo manual |
 
 ---
@@ -284,6 +307,8 @@ El script es siempre la fuente de verdad
 | Decisión | Alternativas consideradas | Razón |
 |----------|--------------------------|-------|
 | PK `ticker_mappings` = `(isin, exchange)` | Solo isin, (isin, currency) | Un ISIN puede cotizar en varias plazas con diferente moneda; exchange es el discriminador natural |
+| Exchange en MIC (ISO 10383) | Abreviaciones libres del broker | Canon único evita colisiones LSE/XLON; resolve_ticker normaliza antes de insertar; si broker no trae exchange → resolución manual |
+| Orden de release: migrate → borrar TICKER_MAP → push | Eliminar TICKER_MAP antes de migrar | Garantiza que ISINs personales no llegan al historial de git del repo público |
 | Auto-resolve Yahoo → fallback manual | Seed file en repo, solo manual | Sin seed file que mantener; Yahoo cubre la mayoría; manual como red de seguridad |
 | FX auto-fetch con degradación elegante | Solo manual, solo auto | Automatiza el happy path sin bloquear al usuario si la API falla |
 | TRM: URL Banrep explícita en fallback | Instrucción genérica | El usuario sabe exactamente qué hacer — reduce fricción del fallback manual |
