@@ -51,6 +51,55 @@ _SUFFIX_TO_MIC = {
 }
 _DEFAULT_MIC = ("XNAS", "USD")  # US tickers have no suffix → NASDAQ/NYSE default
 
+# Historical TICKER_MAP — embedded here so migrate.py works independently of snapshot.py.
+# This is the complete mapping at the time of the v1→v2 schema migration.
+# New tickers added after migration will be resolved via resolve_ticker.py.
+_HISTORICAL_TICKER_MAP = {
+    # ── US stocks (USD) — XNAS default
+    "US00724F1012": "ADBE",
+    "US0494681010": "TEAM",
+    "US15118V2079": "CELH",
+    "US1696561059": "CMG",
+    "US25754A2015": "DPZ",
+    "US26603R1068": "DUOL",
+    "US45841N1072": "IBKR",
+    "US4612021034": "INTU",
+    "US5007673065": "KWEB",
+    "US58733R1023": "MELI",
+    "US30303M1027": "META",
+    "US5949181045": "MSFT",
+    "IL0011762130": "MNDY",
+    "US6541061031": "NKE",
+    "US02156V1098": "OKLO",
+    "CH1134540470": "ONON",
+    "KYG687071012": "PAGS",
+    "US70450Y1038": "PYPL",
+    "US79466L3024": "CRM",
+    "US81762P1021": "NOW",
+    "LU1778762911": "SPOT",
+    "US9224751084": "VEEV",
+    "US98138H1014": "WDAY",
+    # ── US ETFs (USD) — XNAS default
+    "US4642898427": "EPU",
+    # ── LSE ETFs — USD share class (iShares USD-denominated on London Stock Exchange)
+    "IE00B4L5Y983": "IWDA.L",
+    "IE00B5BMR087": "CSPX.L",
+    "IE00BKM4GZ66": "EIMI.L",
+    "IE00B579F325": "SGLD.L",
+    "IE00BGYWCB81": "VDEA.L",
+    "IE00BF16M727": "CIBR.L",
+    "IE00BYWZ0440": "IHYA.L",
+    "IE00B43QJJ40": "GLAG.L",
+    "LU0292109344": "XMBD.L",
+    "LU1681045297": "ALAU.L",
+    # ── Euronext Paris — EUR-quoted
+    "FR0000121014": "MC.PA",
+    "LU1563454310": "CLIM.PA",
+    "LU1650489385": "MTE.PA",
+    # ── WisdomTree Bitcoin EUR — Euronext Paris
+    "GB00BJYDH287": "WBTC.PA",
+}
+
 
 def _infer_exchange_currency(ticker: str) -> tuple:
     """Infer MIC exchange and currency from Yahoo ticker suffix."""
@@ -120,15 +169,13 @@ def main():
     apply_ddl(conn)
     print("   ✓ ticker_mappings and lot_assignments tables ensured")
 
-    print("2. Backfilling ticker_mappings from snapshot.py TICKER_MAP…")
-    try:
-        sys.path.insert(0, os.path.dirname(__file__))
-        from snapshot import TICKER_MAP
-        inserted = backfill_ticker_mappings(conn, TICKER_MAP)
-        total = conn.execute("SELECT COUNT(*) FROM ticker_mappings").fetchone()[0]
+    print("2. Backfilling ticker_mappings from historical map…")
+    inserted = backfill_ticker_mappings(conn, _HISTORICAL_TICKER_MAP)
+    total = conn.execute("SELECT COUNT(*) FROM ticker_mappings").fetchone()[0]
+    if inserted > 0:
         print(f"   ✓ Inserted {inserted} new entries ({total} total in ticker_mappings)")
-    except ImportError:
-        print("   ⚠  TICKER_MAP not found in snapshot.py — skipping backfill (already migrated?)")
+    else:
+        print(f"   ✓ All {total} entries already present — skipping (idempotent)")
 
     print("3. Verifying integrity…")
     try:
