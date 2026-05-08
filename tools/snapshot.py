@@ -27,55 +27,12 @@ from fifo import build_queues
 
 DB = os.path.join(os.path.dirname(__file__), "..", "portfolio.db")
 
-# ISIN → Yahoo Finance ticker
-# Verified: Yahoo returns the correct currency via info['currency'] per ticker.
-# LSE ETFs suffixed .L — all are USD share classes (Yahoo confirms USD).
-# Euronext Paris *.PA — all EUR-quoted.
-TICKER_MAP = {
-    # ── US stocks (USD)
-    "US00724F1012": "ADBE",
-    "US0494681010": "TEAM",
-    "US15118V2079": "CELH",
-    "US1696561059": "CMG",
-    "US25754A2015": "DPZ",
-    "US26603R1068": "DUOL",
-    "US45841N1072": "IBKR",
-    "US4612021034": "INTU",
-    "US5007673065": "KWEB",
-    "US58733R1023": "MELI",
-    "US30303M1027": "META",
-    "US5949181045": "MSFT",
-    "IL0011762130": "MNDY",
-    "US6541061031": "NKE",
-    "US02156V1098": "OKLO",
-    "CH1134540470": "ONON",
-    "KYG687071012": "PAGS",
-    "US70450Y1038": "PYPL",
-    "US79466L3024": "CRM",
-    "US81762P1021": "NOW",
-    "LU1778762911": "SPOT",
-    "US9224751084": "VEEV",
-    "US98138H1014": "WDAY",
-    # ── US ETFs (USD)
-    "US4642898427": "EPU",
-    # ── LSE ETFs — Yahoo confirms USD-quoted (USD share class, not GBp)
-    "IE00B4L5Y983": "IWDA.L",   # iShares Core MSCI World       → USD
-    "IE00B5BMR087": "CSPX.L",   # iShares Core S&P 500          → USD
-    "IE00BKM4GZ66": "EIMI.L",   # iShares Core EM IMI           → USD
-    "IE00B579F325": "SGLD.L",   # Invesco Physical Gold ETC     → USD
-    "IE00BGYWCB81": "VDEA.L",   # Vanguard USD EM Govt Bond     → USD
-    "IE00BF16M727": "CIBR.L",   # First Trust Cybersecurity     → USD
-    "IE00BYWZ0440": "IHYA.L",   # iShares Global HY Corp        → USD (sold)
-    "IE00B43QJJ40": "GLAG.L",   # SPDR BBG Global Agg           → USD (sold)
-    "LU0292109344": "XMBD.L",   # Xtrackers MSCI Brazil         → USD
-    "LU1681045297": "ALAU.L",   # Amundi MSCI EM LatAm          → USD
-    # ── Euronext Paris (SBF) — EUR-quoted. Rule: everything *.PA is EUR.
-    "FR0000121014": "MC.PA",    # LVMH                          → EUR
-    "LU1563454310": "CLIM.PA",  # Amundi Global Agg Green Bond  → EUR (sold)
-    "LU1650489385": "MTE.PA",   # Amundi Euro Gov Bond 10-15Y   → EUR (sold)
-    # ── WisdomTree Bitcoin EUR — Euronext Paris, EUR-quoted
-    "GB00BJYDH287": "WBTC.PA",  # WisdomTree Physical Bitcoin → EUR
-}
+
+def load_ticker_map_from_db(conn) -> dict:
+    """Load {isin: ticker} from ticker_mappings table."""
+    rows = conn.execute("SELECT isin, ticker FROM ticker_mappings").fetchall()
+    return {row[0]: row[1] for row in rows}
+
 
 SQL = """
 SELECT
@@ -97,7 +54,7 @@ ORDER BY s.currency DESC, s.name;
 """
 
 
-def fetch_prices(isins: list) -> tuple:
+def fetch_prices(isins: list, ticker_map: dict) -> tuple:
     """
     Returns:
         prices  : {isin: price_in_usd}   — all values normalised to USD
@@ -117,7 +74,7 @@ def fetch_prices(isins: list) -> tuple:
               file=sys.stderr)
 
     # Build ticker list
-    isin_to_ticker = {i: TICKER_MAP[i] for i in isins if i in TICKER_MAP}
+    isin_to_ticker = {i: ticker_map[i] for i in isins if i in ticker_map}
     all_tickers = list(set(isin_to_ticker.values()))
 
     if not all_tickers:
@@ -169,7 +126,7 @@ def fetch_prices(isins: list) -> tuple:
         prices[isin]  = price_usd
         display[isin] = (raw_price, yahoo_ccy)
 
-    unmapped = [i for i in isins if i not in TICKER_MAP]
+    unmapped = [i for i in isins if i not in ticker_map]
     if unmapped:
         print(f"  ⚠  No ticker for {len(unmapped)} ISINs (positions likely closed).",
               file=sys.stderr)
@@ -198,12 +155,13 @@ def run(broker=None):
 
     # Build FIFO queues before closing connection
     fifo_queues, _ = build_queues(conn)
+    ticker_map = load_ticker_map_from_db(conn)
     conn.close()
 
     title = f"broker: {broker.upper()}" if broker else "all brokers"
     print(f"\n  Fetching live prices…", end=" ", flush=True)
     isins = [r["isin"] for r in rows]
-    prices, display_map, fx = fetch_prices(isins)
+    prices, display_map, fx = fetch_prices(isins, ticker_map)
     eurusd = fx["EURUSD"]
     print(f"done  (EUR/USD {eurusd:.4f})")
 
