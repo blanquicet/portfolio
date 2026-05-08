@@ -154,15 +154,7 @@ Script de migración para usuarios con DB existente. Responsabilidades:
 
 **Regla de schema:** `schema.sql` define siempre el estado final (para usuarios nuevos). `migrate.py` lleva bases existentes a ese estado. Nunca alterar `schema.sql` para compatibilidad hacia atrás.
 
-**Estrategia de release — orden obligatorio para el mantenedor del repo:**
-El `TICKER_MAP` en `snapshot.py` contiene ISINs del portafolio personal del mantenedor. Si se elimina el map del código antes de migrar la DB, la información nunca llega al repo. El flujo correcto es:
-
-1. Correr `python3 tools/migrate.py` localmente → verifica que `ticker_mappings` quedó populada
-2. Eliminar `TICKER_MAP` de `snapshot.py` (el código ya no lo referencia tras el refactor)
-3. Verificar con `git diff` que ningún ISIN personal queda en el código trackeado
-4. Solo entonces hacer push / publicar el repo
-
-Este orden garantiza que el historial de git nunca contiene el mapa personal (asumiendo que `TICKER_MAP` se introdujo en un commit privado o se squashea antes de publicar).
+**Estrategia de release:** El repo se publica directamente después de implementar las tareas del plan. No hay datos personales en el código — `portfolio.db` está en `.gitignore` y `TICKER_MAP` fue eliminado del código sin necesidad de backfill. Los tickers se resuelven orgánicamente vía `resolve_ticker.py` al hacer el primer `/ingest`.
 
 ---
 
@@ -287,7 +279,7 @@ El script es siempre la fuente de verdad
 
 ### Cambios de privacidad al código existente
 
-- `TICKER_MAP` en `snapshot.py` — eliminado después de correr `migrate.py` (backfill a DB)
+- `TICKER_MAP` en `snapshot.py` — eliminado directamente (sin backfill); los tickers se poblan orgánicamente vía `resolve_ticker.py` durante la ingestión
 - Referencias a brokers específicos en nombres de queries — generalizadas
 - `tax_report.py` — se documenta explícitamente como Colombia-specific, sin cambios de lógica
 - Skills: rutas absolutas eliminadas, reemplazadas por rutas relativas desde repo root
@@ -310,7 +302,7 @@ El script es siempre la fuente de verdad
 |----------|--------------------------|-------|
 | PK `ticker_mappings` = `(isin, exchange)` | Solo isin, (isin, currency) | Un ISIN puede cotizar en varias plazas con diferente moneda; exchange es el discriminador natural |
 | Exchange en MIC (ISO 10383) | Abreviaciones libres del broker | Canon único evita colisiones LSE/XLON; resolve_ticker normaliza antes de insertar; si broker no trae exchange → resolución manual |
-| Orden de release: migrate → borrar TICKER_MAP → push | Eliminar TICKER_MAP antes de migrar | Garantiza que ISINs personales no llegan al historial de git del repo público |
+| No hay seed file personal en el repo | Seed file en repo | `TICKER_MAP` eliminado del código; tickers se resuelven orgánicamente al ingestar — nada personal en git
 | Auto-resolve Yahoo → fallback manual | Seed file en repo, solo manual | Sin seed file que mantener; Yahoo cubre la mayoría; manual como red de seguridad |
 | FX auto-fetch con degradación elegante | Solo manual, solo auto | Automatiza el happy path sin bloquear al usuario si la API falla |
 | TRM: URL Banrep explícita en fallback | Instrucción genérica | El usuario sabe exactamente qué hacer — reduce fricción del fallback manual |
