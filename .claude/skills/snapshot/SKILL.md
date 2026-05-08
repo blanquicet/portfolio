@@ -1,6 +1,6 @@
 ---
 name: snapshot
-description: Show live portfolio snapshot with market prices, unrealized P&L, and portfolio weights. Accepts optional broker filter (ibkr, fidelity, scalable, etc.).
+description: "Ver posiciones actuales del portafolio con precios live y P&L — úsame cuando el usuario pida ver su portafolio, posiciones, o cuánto lleva ganado."
 ---
 
 # Portfolio Snapshot

@@ -1,7 +1,8 @@
 {
   "skills": [
-    ".claude/skills/setup.md",
-    ".claude/skills/ingest.md",
-    ".claude/skills/snapshot.md"
+    ".claude/skills/setup",
+    ".claude/skills/ingest",
+    ".claude/skills/snapshot",
+    ".claude/skills/tax"
   ]
 }

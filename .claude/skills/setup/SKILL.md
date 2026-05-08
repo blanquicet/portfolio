@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Initialize portfolio.db for a new user, or migrate an existing DB to the current schema.
+description: "Inicializar o migrar la base de datos del portafolio — úsame cuando el usuario quiera hacer setup inicial o tenga problemas con la DB."
 ---
 
 # Portfolio Setup

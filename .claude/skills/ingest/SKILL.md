@@ -1,11 +1,29 @@
 ---
 name: ingest
-description: Ingest transactions from a PDF or screenshot. Extracts data, resolves tickers, loads FX rates, inserts into DB.
+description: "Ingestar transacciones de un broker — úsame cuando el usuario quiera agregar acciones, importar un extracto, o subir un PDF/screenshot de su broker."
 ---
 
 # Portfolio Ingest
 
+> **Python:** Usa el binario más reciente disponible: `python3.13`, `python3.12`, `python3.11`, o `python3` si ya es ≥3.11. Substitúyelo donde veas `python3` en los comandos.
+
 The user has provided a PDF or screenshot from their broker.
+
+## Precondition — verificar DB
+
+Antes de extraer transacciones, verifica que la DB esté lista:
+
+```bash
+ls portfolio.db 2>/dev/null && echo "EXISTS" || echo "NEW"
+```
+
+- Si dice `NEW`: crea la DB primero ejecutando estos comandos, luego continúa con Step 1:
+  ```bash
+  <python> -c "import sys; v=sys.version_info; print(f'{v.major}.{v.minor}')"
+  sqlite3 portfolio.db < schema.sql && echo "DB created OK"
+  ```
+  (donde `<python>` es el binario python3.11+ disponible — ver abajo)
+- Si dice `EXISTS`: continúa directamente con Step 1.
 
 ## Step 1 — Extract transactions
 

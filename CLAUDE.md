@@ -1,79 +1,51 @@
-# CLAUDE.md
+# CLAUDE.md — Portfolio Tracker
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Este repo es un tracker de portafolio de inversiones personal para colombianos.
+Self-hosted, operado vía agente de IA (Claude Code, GitHub Copilot, etc.).
 
-## What this repo is
+## Qué hace
 
-A personal investment portfolio tracker backed by a single SQLite database (`portfolio.db`). All tools are standalone Python 3 scripts that read/write the DB directly. There is no web server, no ORM, and no build step.
+- Ingesta transacciones desde PDFs o screenshots de brokers
+- Mantiene un portafolio en SQLite con costo base FIFO y asignación de lote específico
+- Muestra posiciones con precios live de Yahoo Finance
+- Genera reporte de renta para Colombia (Ganancia Ocasional / Renta Ordinaria)
 
-## Common commands
+## Skills disponibles
 
-```bash
-# View current positions with live prices and unrealized P&L
-python3 tools/snapshot.py              # all brokers
-python3 tools/snapshot.py ibkr        # IBKR only
-python3 tools/snapshot.py fidelity    # Fidelity only
+El agente detecta automáticamente qué skill usar según el contexto:
 
-# Tax report for Colombia renta declaration
-python3 tools/tax_report.py           # fiscal year 2025
-python3 tools/tax_report.py 2024      # another year
-python3 tools/tax_report.py --detail  # show individual FIFO lots
+| Intención del usuario | Skill activada |
+|-----------------------|---------------|
+| "quiero agregar mis acciones", "tengo un PDF del broker" | `ingest` |
+| "muéstrame mi portafolio", "cuánto llevo ganado" | `snapshot` |
+| "reporte de impuestos", "declaración de renta 2024" | `tax` |
+| "setup", "inicializar", problemas con la DB | `setup` |
 
-# Insert data
-python3 tools/insert.py security '<json>'
-python3 tools/insert.py transaction '<json>'
-python3 tools/insert.py query '<sql>'
+No es necesario usar slash commands — basta con describir lo que quieres.
 
-# Load FX rates
-python3 tools/load_trm.py trm_data.txt         # USD/COP from Banco de la República
-python3 tools/load_eurusd.py --download         # EUR/USD from ECB API
+## Arquitectura
 
-# Raw SQL queries
-sqlite3 portfolio.db < queries/snapshot.sql
-sqlite3 portfolio.db "SELECT * FROM v_transactions LIMIT 10;"
+```
+portfolio/
+├── schema.sql          # Estado final del schema (fuente de verdad para nuevos usuarios)
+├── portfolio.db        # DB local — en .gitignore, nunca se sube
+├── tools/
+│   ├── fifo.py         # Motor FIFO compartido
+│   ├── snapshot.py     # Posiciones con precios live (lee tickers de ticker_mappings)
+│   ├── tax_report.py   # Reporte renta Colombia (hardcodeado: TRM Banrep, UVT DIAN)
+│   ├── insert.py       # Insertar securities/transacciones, detecta duplicados
+│   ├── resolve_ticker.py # ISIN+exchange → Yahoo ticker, con cache en DB
+│   ├── load_fx.py      # Auto-fetch EUR/USD (ECB), TRM (Banrep), con fallback manual
+│   ├── migrate.py      # Migrar DB existente al schema actual
+│   └── assign_lot.py   # Asignar lote específico a una venta
+├── queries/            # SQL fijo por caso de uso
+└── .claude/skills/     # Skills del agente (ingest, snapshot, tax, setup)
 ```
 
-## Architecture
+## Convenciones clave
 
-### Database (`portfolio.db` / `schema.sql`)
-
-Three core tables:
-- **`securities`** — one row per instrument (ISIN, name, type, currency)
-- **`transactions`** — every trade event (buy, sell, vesting, split, transfer_in/out, dividend, fee, sell_to_cover, interest)
-- **`fx_rates`** — historical daily rates; stores EUR/USD (from ECB) and USD/COP (TRM from Banco de la República)
-
-Two views: `v_transactions` (joined readable view) and `v_positions` (net shares per ISIN per broker).
-
-### FIFO engine (`tools/fifo.py`)
-
-Shared module imported by both `snapshot.py` and `tax_report.py`. Key rules:
-- `buy` / `vesting` → add lot to queue
-- `sell` → consume lots oldest-first (FIFO)
-- `sell_to_cover` → does **not** consume FIFO lots; cost = sale price, gain = $0 (RSU vest value is already in employer cost basis)
-- `transfer_in/out` → skipped by FIFO; FOP transfers preserve original cost basis
-
-`build_queues()` returns a dict of `{isin: FifoQueue}` loaded from the DB.
-
-### Snapshot (`tools/snapshot.py`)
-
-Uses `yfinance` for live prices. ISIN → Yahoo ticker mapping is hardcoded in `TICKER_MAP`. Currency conversion: EUR prices × EURUSD rate; all market values summed in USD.
-
-### Tax report (`tools/tax_report.py`)
-
-Colombian tax rules applied on top of FIFO lots:
-- Holding > 730 days → *Ganancia Ocasional* (15% flat, excluded from exógena)
-- Holding ≤ 730 days → *Renta Ordinaria* (progressive rate, included in exógena)
-
-FX chain: USD/COP via TRM; EUR/COP derived as EUR/USD × TRM.
-
-### Skills (`.claude/skills/`)
-
-Custom Claude Code skills for common workflows (e.g., `snapshot` skill runs `snapshot.py` and formats output). Skills are invoked via the `Skill` tool, not directly.
-
-## Key conventions
-
-- All currency stored per transaction as the **instrument's trading currency**, not the broker account currency (e.g., an EUR-quoted ETF stays EUR even when held at a USD-account broker).
-- Dates are ISO 8601 strings (`YYYY-MM-DD`) throughout.
-- `source_file` column on transactions records the original import filename for traceability.
-- Foreign keys are enforced (`PRAGMA foreign_keys = ON` in every connection).
-- The absolute DB path is resolved from `__file__` in each tool (`../portfolio.db`), so scripts work from any working directory.
+- Fechas: ISO 8601 (`YYYY-MM-DD`) en toda la DB
+- Moneda: la del instrumento en su plaza de cotización (no la cuenta del broker)
+- `source_file`: nombre del PDF original — trazabilidad de cada transacción
+- Foreign keys activas en todas las conexiones (`PRAGMA foreign_keys = ON`)
+- DB path resuelto desde `__file__` en cada script — funciona desde cualquier directorio
