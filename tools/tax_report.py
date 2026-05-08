@@ -400,8 +400,9 @@ def run():
                   "STC":      "⚪ STC"}[clsf]
 
         print(f"  {sign} {tag}  │  {r['name'][:40]:<40}  │  {r['sell_date']}  │  {r['qty']:.4f} uds")
-        print(f"     Ingreso :  ${r['ingreso_usd']:>12,.2f} USD  │  TRM venta {r['trm_venta']:>9,.2f}  │  ${r['ingreso_cop']:>16,.0f} COP")
-        print(f"     Costo   :  ${r['costo_usd']:>12,.2f} USD  │                    │  ${r['costo_cop']:>16,.0f} COP")
+        trm_v_str = f"{r['trm_venta']:>9,.2f}" if r['trm_venta'] else f"{'sin TRM':>9}"
+        print(f"     Ingreso :  ${r['ingreso_usd']:>12,.2f} USD  │  TRM venta {trm_v_str}  │  ${r['ingreso_cop'] or 0:>16,.0f} COP")
+        print(f"     Costo   :  ${r['costo_usd']:>12,.2f} USD  │                    │  ${r['costo_cop'] or 0:>16,.0f} COP")
         print(f"     Ganancia:  ${gn_u:>+12,.2f} USD  │                    │  ${gn_c:>+16,.0f} COP")
 
         if DETAIL:
