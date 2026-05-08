@@ -271,7 +271,7 @@ def run(broker=None):
     print(f"  {'TOTAL':<36}  {'':>4}  {'':>8}  {'':>9}  {'':>12}  "
           f"${portfolio_usd:>11,.2f}  {'':>13}  {'':>8}  {'100.0%':>7}")
     print(f"\n  Notes:")
-    print(f"  • Avg cost in USD = weighted avg of buys+vestings converted at historical EUR/USD (fx_rates table).")
+    print(f"  • Avg cost in USD = FIFO weighted avg of remaining (unsold) lots, converted at historical FX (fx_rates table).")
     print(f"  • P&L computed in USD using historical cost basis — no live FX distortion.")
     print(f"  • Positions with no buy/vesting (transfer-in only) show '—' avg cost.\n")
 
