@@ -188,8 +188,8 @@ def build_queues(conn, as_of_date=None):
             "SELECT sell_id, buy_id, quantity FROM lot_assignments ORDER BY id"
         ):
             assignments_by_sell[row[0]].append((row[1], row[2]))
-    except Exception:
-        pass  # table may not exist in DBs created before migration
+    except sqlite3.OperationalError:
+        pass  # table does not exist in DBs created before migration
 
     queues = defaultdict(FifoQueue)
     errors = []
@@ -210,10 +210,21 @@ def build_queues(conn, as_of_date=None):
 
         elif typ == "sell":
             if tid in assignments_by_sell:
-                try:
-                    queues[isin].consume_specific(assignments_by_sell[tid])
-                except ValueError as e:
-                    errors.append(f"{r['name']} {dt} (specific lot): {e}")
+                assigned_total = sum(q for _, q in assignments_by_sell[tid])
+                if abs(assigned_total - qty) > 1e-6:
+                    errors.append(
+                        f"{r['name']} {dt}: lot assignments sum {assigned_total:.4f} "
+                        f"!= sell qty {qty:.4f} — using FIFO instead"
+                    )
+                    try:
+                        queues[isin].consume(qty)
+                    except ValueError as e:
+                        errors.append(f"{r['name']} {dt}: {e}")
+                else:
+                    try:
+                        queues[isin].consume_specific(assignments_by_sell[tid])
+                    except ValueError as e:
+                        errors.append(f"{r['name']} {dt} (specific lot): {e}")
             else:
                 try:
                     queues[isin].consume(qty)

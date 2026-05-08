@@ -73,11 +73,12 @@ def cmd_show(conn, sell_id):
     sell = conn.execute("""
         SELECT t.*, s.isin, s.name FROM transactions t
         JOIN securities s ON s.id = t.security_id
-        WHERE t.id = ? AND t.type IN ('sell', 'sell_to_cover')
+        WHERE t.id = ? AND t.type = 'sell'
     """, (sell_id,)).fetchone()
 
     if not sell:
         print(f"Error: transaction id={sell_id} not found or is not a sell.")
+        print(f"  (sell_to_cover cannot have lot assignments — gain=$0 regardless of lot)")
         sys.exit(1)
 
     print(f"\n  Sell: id={sell_id}  {sell['date']}  {sell['name']}  "
@@ -110,8 +111,9 @@ def cmd_add(conn, sell_id, buy_id, qty):
         "SELECT t.*, s.isin FROM transactions t JOIN securities s ON s.id=t.security_id WHERE t.id=?",
         (sell_id,)
     ).fetchone()
-    if not sell or sell["type"] not in ("sell", "sell_to_cover"):
-        print(f"Error: id={sell_id} is not a sell/sell_to_cover transaction.")
+    if not sell or sell["type"] not in ("sell",):
+        print(f"Error: id={sell_id} is not a sell transaction.")
+        print(f"  (sell_to_cover uses FIFO always — gain=$0 regardless of lot choice)")
         sys.exit(1)
 
     buy = conn.execute(
@@ -130,6 +132,19 @@ def cmd_add(conn, sell_id, buy_id, qty):
         print(f"Error: buy date {buy['date']} is after sell date {sell['date']}.")
         sys.exit(1)
 
+    # Validate cumulative assignment does not exceed sell quantity
+    existing = conn.execute(
+        "SELECT COALESCE(SUM(quantity), 0) FROM lot_assignments WHERE sell_id=?",
+        (sell_id,)
+    ).fetchone()[0]
+    if existing + qty > sell["quantity"] + 1e-6:
+        print(f"Error: assignment would exceed sell quantity.")
+        print(f"  Sell qty:     {sell['quantity']:.4f}")
+        print(f"  Already assigned: {existing:.4f}")
+        print(f"  Requested now:    {qty:.4f}")
+        print(f"  Total would be:   {existing + qty:.4f}")
+        sys.exit(1)
+
     conn.execute(
         "INSERT INTO lot_assignments (sell_id, buy_id, quantity) VALUES (?, ?, ?)",
         (sell_id, buy_id, qty)
@@ -137,6 +152,9 @@ def cmd_add(conn, sell_id, buy_id, qty):
     conn.commit()
     print(f"✓ Assigned {qty} units of buy id={buy_id} ({buy['date']}) "
           f"to sell id={sell_id} ({sell['date']}).")
+    remaining = sell["quantity"] - existing - qty
+    if remaining > 1e-6:
+        print(f"  ℹ️  {remaining:.4f} units still unassigned — will use FIFO for those.")
 
 
 def cmd_delete(conn, sell_id, buy_id=None):
