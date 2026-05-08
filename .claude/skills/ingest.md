@@ -76,7 +76,7 @@ For each transaction:
 python3 tools/insert.py transaction '{"isin":"<isin>","date":"<date>","type":"<tx_type>","broker":"<broker>","quantity":<qty>,"price":<price>,"currency":"<tx_currency>","total":<total>,"fee":<fee>,"exchange":"<exchange>","notes":"<notes>","source_file":"<source_file>"}'
 ```
 
-**If exit code 2 (duplicate detected):** tell the user which transaction was skipped and why.
+**If exit code 2 (duplicate detected):** Show the user the duplicate warning from stderr. Ask: "This looks like a duplicate — insert anyway? (yes/no)". If yes, re-run the same command with `--force` appended. If no, skip.
 
 ## Step 7 — Summary
 

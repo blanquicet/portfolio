@@ -8,6 +8,9 @@ Usage:
 Input format (pipe-separated, from Banco de la República):
     | 2021/01/01 | 3432.50 |
 """
+# DEPRECATED: Use tools/load_fx.py for new ingestions.
+# This script is kept for manual TRM loading when the Banrep API fails.
+# See the fallback instructions printed by load_fx.py for usage.
 import re, sqlite3, sys, os
 
 DB = os.path.join(os.path.dirname(__file__), "..", "portfolio.db")

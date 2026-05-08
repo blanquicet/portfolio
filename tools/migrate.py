@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS lot_assignments (
 
 # MIC mapping for backfill — inferred from TICKER_MAP suffixes
 _SUFFIX_TO_MIC = {
-    ".L":  ("XLON", "USD"),
+    ".L":  ("XLON", "GBP"),   # LSE tickers quote in GBp/GBP (e.g. IWDA.L)
     ".PA": ("XPAR", "EUR"),
 }
 _DEFAULT_MIC = ("XNAS", "USD")  # US tickers have no suffix → NASDAQ/NYSE default

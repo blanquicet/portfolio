@@ -165,9 +165,15 @@ def run(dates: list, pairs: list):
             if (from_ccy, to_ccy) == ("USD", "COP"):
                 print(format_trm_fallback_message(missing))
             else:
+                ecb_url = (
+                    f"https://data-api.ecb.europa.eu/service/data/EXR/"
+                    f"D.{to_ccy}.{from_ccy}.SP00.A?format=csvdata"
+                )
                 print(
-                    f"⚠  {from_ccy}/{to_ccy}: {len(missing)} rates missing. "
-                    f"Download from ECB and run: python3 tools/load_eurusd.py <file>"
+                    f"⚠  {from_ccy}/{to_ccy}: {len(missing)} rates missing.\n"
+                    f"   Download from ECB: {ecb_url}\n"
+                    f"   Then run: python3 tools/load_fx.py --dates {','.join(missing)} --pairs {from_ccy}/{to_ccy}\n"
+                    f"   (The ECB CSV will be auto-parsed on next run)"
                 )
 
     conn.close()

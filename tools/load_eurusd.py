@@ -8,6 +8,9 @@ Usage:
     python3 tools/load_eurusd.py /tmp/ecb_eurusd.csv
     python3 tools/load_eurusd.py --download
 """
+# DEPRECATED: Use tools/load_fx.py for new ingestions.
+# This script is kept for manual EUR/USD loading when the ECB API fails.
+# See the fallback instructions printed by load_fx.py for usage.
 import csv, sqlite3, sys, os, subprocess
 
 DB = os.path.join(os.path.dirname(__file__), "..", "portfolio.db")
