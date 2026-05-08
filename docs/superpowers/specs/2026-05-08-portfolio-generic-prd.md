@@ -112,7 +112,7 @@ El campo `exchange` usa siempre códigos ISO 10383 (MIC). Los brokers suelen tra
 
 Si el broker no trae exchange (campo nulo o vacío), `resolve_ticker.py` no puede construir la PK → cae directamente a resolución manual: la skill pregunta al usuario en qué bolsa opera el instrumento antes de intentar la búsqueda.
 
-Cuando un ISIN tiene múltiples entradas, la skill de ingestión usa la plaza del broker de origen (ya normalizada a MIC) para seleccionar el ticker correcto.
+Cuando un ISIN tiene múltiples entradas (ej. mismo fondo en XLON y XPAR), `snapshot.py` selecciona el ticker con preferencia `source='manual'` sobre `'auto'`. El caso de un mismo ISIN activo simultáneamente en dos plazas distintas está fuera del scope de v1 — el resolver usa `(isin, exchange)` para guardar mappings, pero snapshot lee por ISIN solamente.
 
 #### `resolve_ticker.py`
 
@@ -146,9 +146,11 @@ Descarga manual en: https://suameca.banrep.gov.co/estadisticas-economicas/inform
 
 Script de migración para usuarios con DB existente. Responsabilidades:
 1. Aplica DDL de nuevas tablas si no existen (`ticker_mappings`, `lot_assignments`)
-2. Backfill de `ticker_mappings` desde el `TICKER_MAP` hardcodeado en el código (se corre una sola vez antes de eliminar el hardcode)
+2. Verifica si `ticker_mappings` está poblada — si está vacía, informa al usuario que los tickers se resolverán automáticamente al hacer el primer `/ingest`
 3. Verifica integridad referencial básica post-migración
 4. Idempotente — puede correrse múltiples veces sin efecto secundario
+
+**Nota:** El backfill automático desde `TICKER_MAP` fue eliminado del diseño final. Razón: incrustar el mapa de tickers del mantenedor en código trackeado reintroduciría un "seed file" personal en el repo público, que el PRD define como fuera de scope. Los tickers se poblan orgánicamente vía `resolve_ticker.py` durante la ingestión.
 
 **Regla de schema:** `schema.sql` define siempre el estado final (para usuarios nuevos). `migrate.py` lleva bases existentes a ese estado. Nunca alterar `schema.sql` para compatibilidad hacia atrás.
 
@@ -258,12 +260,12 @@ El script es siempre la fuente de verdad
 | Flujo | Criterio de aceptación |
 |-------|----------------------|
 | **Setup** | Usuario nuevo clona repo → `/setup` → DB creada sin errores → `/snapshot` retorna "no hay posiciones" sin crashear |
-| **Setup (DB existente)** | `migrate.py` corre sin errores → `ticker_mappings` populada desde TICKER_MAP anterior → `/snapshot` produce mismo resultado que antes de migrar |
+| **Setup (DB existente)** | `migrate.py` corre sin errores → DDL aplicado → integridad verificada → si `ticker_mappings` está vacía, mensaje claro indicando que los tickers se resolverán al hacer `/ingest` → `/snapshot` retorna lista de posiciones (sin precios live si ticker_mappings vacía) |
 | **Ingest — happy path** | PDF de broker conocido → todas las transacciones insertadas → tickers resueltos automáticamente → FX cargado → sin duplicados |
 | **Ingest — ambigüedad de ticker** | ISIN con múltiples plazas → Claude presenta opciones → usuario elige → ticker guardado como `manual` → ingestión completa |
 | **Ingest — fallo TRM** | API Banrep falla → mensaje con URL + pasos manuales → usuario descarga → `load_trm.py` → ingestión completa |
 | **Ingest — reingestión** | Mismo PDF corrido dos veces → segunda vez: "X ya existían, 0 insertadas" sin duplicados |
-| **Snapshot** | Ninguna referencia a `TICKER_MAP` en código → todos los tickers vienen de DB → mismas posiciones (ISINs, cantidades, costos FIFO) que pre-refactor; valores de mercado con tolerancia ±1% por precios live |
+| **Snapshot** | Ninguna referencia a `TICKER_MAP` en código → todos los tickers vienen de DB → mismas posiciones (ISINs, cantidades, costos FIFO) que pre-refactor; valores de mercado con tolerancia ±1% por precios live. **Nota de diseño:** `ticker_mappings` usa PK `(isin, exchange)` para el resolver, pero snapshot lee tickers por ISIN solamente (preferencia `source='manual'` sobre `'auto'`). Soporte de mismo ISIN en dos plazas activas simultáneas está fuera del scope de v1. |
 | **Tax** | Tax report con lote específico asignado produce resultado correcto → validado contra cálculo manual |
 
 ---

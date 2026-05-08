@@ -101,7 +101,8 @@ def yahoo_search(isin: str):
                 continue
             ccy = q.get("currency", "USD")
             exch = q.get("exchange", "")
-            mic = normalize_exchange(exch)
+            # Use safe lookup — never exit on unknown Yahoo exchange codes
+            mic = MIC_ALIASES.get(exch.upper(), exch.upper())
             results.append({"ticker": sym, "currency": ccy, "exchange_mic": mic, "exchange_raw": exch})
         return results
     except ImportError:
