@@ -67,3 +67,16 @@ FROM transactions t
 JOIN securities s ON s.id = t.security_id
 GROUP BY s.isin, t.broker
 HAVING shares > 0.0001;
+
+-- Specific-lot assignments: override FIFO for a particular sell transaction.
+-- When a sell_id has rows here, those exact buy lots are consumed (in row order)
+-- instead of the oldest-first FIFO default.
+-- Partial coverage is NOT supported: either all qty of the sell is covered by
+-- assignments, or none are (falls back to FIFO).
+CREATE TABLE IF NOT EXISTS lot_assignments (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    sell_id  INTEGER NOT NULL REFERENCES transactions(id),
+    buy_id   INTEGER NOT NULL REFERENCES transactions(id),
+    quantity REAL    NOT NULL CHECK(quantity > 0),
+    UNIQUE(sell_id, buy_id)
+);
