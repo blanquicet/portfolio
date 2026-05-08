@@ -157,7 +157,15 @@ def build_queues(conn, as_of_date=None):
             except ValueError as e:
                 errors.append(f"{r['name']} {dt}: {e}")
 
-        # sell_to_cover: cost = sale price, no FIFO consumption
-        # transfer_in / transfer_out: no queue change
+        elif typ == "sell_to_cover":
+            # STC physically removes shares — consume FIFO lots so queue stays
+            # accurate. We do NOT report capital gain (income already declared
+            # as labor income in employer CIR / Microsoft casilla 46).
+            try:
+                queues[isin].consume(qty)
+            except ValueError as e:
+                errors.append(f"{r['name']} {dt} STC: {e}")
+
+        # transfer_in / transfer_out: no queue change (FOP — basis preserved)
 
     return queues, errors
