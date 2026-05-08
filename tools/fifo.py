@@ -61,14 +61,15 @@ class FifoQueue:
     """FIFO lot queue for one instrument."""
 
     def __init__(self):
-        self.lots = []   # [qty_remaining, price_usd, date_str, source]
+        # Each lot: [qty_remaining, price_usd, date_str, source, buy_id]
+        self.lots = []
 
-    def add(self, qty, price_usd, dt, source):
-        self.lots.append([qty, price_usd, dt, source])
+    def add(self, qty, price_usd, dt, source, buy_id=None):
+        self.lots.append([qty, price_usd, dt, source, buy_id])
 
     def consume(self, qty_needed):
         """
-        Consume qty_needed units FIFO.
+        Consume qty_needed units FIFO (oldest first).
         Returns list of (qty_consumed, price_usd, buy_date, source).
         Raises ValueError if queue is insufficient.
         """
@@ -77,7 +78,7 @@ class FifoQueue:
         for lot in self.lots:
             if remaining <= 0:
                 break
-            lot_qty, price_usd, buy_date, source = lot
+            lot_qty, price_usd, buy_date, source, _buy_id = lot
             if lot_qty <= 0:
                 continue
             take = min(lot_qty, remaining)
@@ -88,10 +89,44 @@ class FifoQueue:
             raise ValueError(f"FIFO insufficient: missing {remaining:.4f} units")
         return consumed
 
+    def consume_specific(self, assignments):
+        """
+        Consume specific lots by buy_id.
+
+        assignments: list of (buy_id, qty) tuples — consumed in order given.
+
+        Returns list of (qty_consumed, price_usd, buy_date, source) — same
+        format as consume(), so callers are interchangeable.
+
+        Raises ValueError if:
+          - a buy_id is not found in this queue
+          - requested qty exceeds the lot's remaining qty
+        """
+        lot_index = {lot[4]: lot for lot in self.lots if lot[4] is not None}
+
+        consumed = []
+        for buy_id, qty_needed in assignments:
+            if buy_id not in lot_index:
+                raise ValueError(
+                    f"buy_id {buy_id} not found in queue "
+                    f"(available: {sorted(lot_index.keys())})"
+                )
+            lot = lot_index[buy_id]
+            lot_qty, price_usd, buy_date, source, _bid = lot
+            if qty_needed > lot_qty + 1e-6:
+                raise ValueError(
+                    f"buy_id {buy_id}: requested {qty_needed:.4f} "
+                    f"but only {lot_qty:.4f} remaining"
+                )
+            take = min(qty_needed, lot_qty)
+            consumed.append((take, price_usd, buy_date, source))
+            lot[0] -= take
+        return consumed
+
     def remaining_lots(self):
         """Return lots with qty > 0 (i.e. not yet sold)."""
         return [(qty, price_usd, dt, src)
-                for qty, price_usd, dt, src in self.lots
+                for qty, price_usd, dt, src, _bid in self.lots
                 if qty > 1e-6]
 
     def avg_cost_usd(self):
