@@ -156,6 +156,9 @@ def build_queues(conn, as_of_date=None):
     Read all buy/vesting/sell transactions from the DB and return
     a dict {isin: FifoQueue} with FIFO state reflecting all sales.
 
+    If a sell transaction has rows in `lot_assignments`, those specific
+    buy lots are consumed instead of the oldest-first FIFO default.
+
     as_of_date: ISO string 'YYYY-MM-DD'. If given, only transactions
                 up to that date are included. Defaults to today.
     """
@@ -178,6 +181,16 @@ def build_queues(conn, as_of_date=None):
         ORDER BY t.date, t.id
     """, params).fetchall()
 
+    # Load all lot_assignments (keyed by sell_id → [(buy_id, quantity), ...])
+    assignments_by_sell = defaultdict(list)
+    try:
+        for row in conn.execute(
+            "SELECT sell_id, buy_id, quantity FROM lot_assignments ORDER BY id"
+        ):
+            assignments_by_sell[row[0]].append((row[1], row[2]))
+    except Exception:
+        pass  # table may not exist in DBs created before migration
+
     queues = defaultdict(FifoQueue)
     errors = []
 
@@ -188,17 +201,24 @@ def build_queues(conn, as_of_date=None):
         typ   = r["type"]
         ccy   = r["t_ccy"]
         total = r["total"]
-        src   = f"{r['broker']} {r['date']} id={r['id']}"
+        tid   = r["id"]
+        src   = f"{r['broker']} {r['date']} id={tid}"
 
         if typ in ("buy", "vesting"):
             price_usd = to_usd(conn, total / qty if total and qty else 0, ccy, dt)
-            queues[isin].add(qty, price_usd, dt, src)
+            queues[isin].add(qty, price_usd, dt, src, buy_id=tid)
 
         elif typ == "sell":
-            try:
-                queues[isin].consume(qty)
-            except ValueError as e:
-                errors.append(f"{r['name']} {dt}: {e}")
+            if tid in assignments_by_sell:
+                try:
+                    queues[isin].consume_specific(assignments_by_sell[tid])
+                except ValueError as e:
+                    errors.append(f"{r['name']} {dt} (specific lot): {e}")
+            else:
+                try:
+                    queues[isin].consume(qty)
+                except ValueError as e:
+                    errors.append(f"{r['name']} {dt}: {e}")
 
         elif typ == "sell_to_cover":
             # STC physically removes shares — consume FIFO lots so queue stays
