@@ -154,7 +154,8 @@ def cmd_add(conn, sell_id, buy_id, qty):
           f"to sell id={sell_id} ({sell['date']}).")
     remaining = sell["quantity"] - existing - qty
     if remaining > 1e-6:
-        print(f"  ℹ️  {remaining:.4f} units still unassigned — will use FIFO for those.")
+        print(f"  ⚠️  {remaining:.4f} units still unassigned — assign all {sell['quantity']:.4f} units")
+        print(f"      or the engine will fall back to full FIFO for this sell.")
 
 
 def cmd_delete(conn, sell_id, buy_id=None):
