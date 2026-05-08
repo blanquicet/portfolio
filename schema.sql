@@ -1,0 +1,69 @@
+CREATE TABLE IF NOT EXISTS securities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    isin TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('etf', 'stock', 'bond', 'cdt', 'crypto_etp', 'fund')),
+    currency TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    security_id INTEGER NOT NULL REFERENCES securities(id),
+    date TEXT NOT NULL,  -- ISO 8601 (YYYY-MM-DD)
+    type TEXT NOT NULL CHECK(type IN ('buy', 'sell', 'transfer_in', 'transfer_out', 'dividend', 'fee', 'vesting', 'sell_to_cover', 'split', 'interest')),
+    broker TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    price REAL,           -- per unit in original currency
+    currency TEXT NOT NULL,
+    total REAL,           -- total amount in original currency
+    fee REAL DEFAULT 0,
+    exchange TEXT,
+    notes TEXT,
+    source_file TEXT
+);
+
+CREATE TABLE IF NOT EXISTS fx_rates (
+    date TEXT NOT NULL,
+    from_currency TEXT NOT NULL,
+    to_currency TEXT NOT NULL,
+    rate REAL NOT NULL,
+    PRIMARY KEY (date, from_currency, to_currency)
+);
+
+-- Useful views
+
+CREATE VIEW IF NOT EXISTS v_transactions AS
+SELECT
+    t.id,
+    s.isin,
+    s.name AS security,
+    t.date,
+    t.type,
+    t.broker,
+    t.quantity,
+    t.price,
+    t.currency,
+    t.total,
+    t.fee,
+    t.exchange,
+    t.notes,
+    t.source_file
+FROM transactions t
+JOIN securities s ON s.id = t.security_id
+ORDER BY t.date;
+
+CREATE VIEW IF NOT EXISTS v_positions AS
+SELECT
+    s.isin,
+    s.name AS security,
+    s.type,
+    SUM(CASE
+        WHEN t.type IN ('buy', 'transfer_in', 'vesting') THEN t.quantity
+        WHEN t.type IN ('sell', 'sell_to_cover', 'transfer_out') THEN -t.quantity
+        ELSE 0
+    END) AS shares,
+    t.broker
+FROM transactions t
+JOIN securities s ON s.id = t.security_id
+GROUP BY s.isin, t.broker
+HAVING shares > 0.0001;
