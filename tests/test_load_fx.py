@@ -42,6 +42,11 @@ def test_find_gaps_partial(db):
     assert gaps == ["2024-01-03"]
 
 
+def test_find_gaps_empty_dates(db):
+    gaps = find_gaps(db, [], "EUR", "USD")
+    assert gaps == []
+
+
 def test_trm_fallback_message_contains_url():
     msg = format_trm_fallback_message(["2024-01-02", "2024-01-03"])
     assert "suameca.banrep.gov.co" in msg

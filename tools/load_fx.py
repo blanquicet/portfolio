@@ -31,6 +31,8 @@ TRM_FALLBACK_DOWNLOAD_URL = (
 
 def find_gaps(conn, dates: list, from_ccy: str, to_ccy: str) -> list:
     """Return dates that are missing from fx_rates for the given pair."""
+    if not dates:
+        return []
     existing = set(
         row[0] for row in conn.execute(
             "SELECT date FROM fx_rates WHERE from_currency = ? AND to_currency = ? AND date IN ({})".format(
