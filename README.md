@@ -1,65 +1,69 @@
 # Portfolio Tracker
 
-A personal investment portfolio tracker for Colombian investors. Self-hosted, operated via Claude Code.
+Tracker de portafolio de inversiones personal para colombianos. Self-hosted, operado desde un agente de IA (Claude Code, GitHub Copilot, u otro compatible con skills/slash commands).
 
-Pass a PDF or screenshot from your broker to Claude — it extracts, ingests, and maintains your portfolio automatically, with FIFO cost basis, specific-lot assignment, and a Colombia tax report.
+Pásale un PDF o screenshot de tu broker al agente — extrae, ingesta y mantiene tu portafolio automáticamente, con costo base FIFO, asignación de lote específico, y reporte de renta para Colombia.
 
-## Requirements
+## Requisitos
 
 - Python 3.11+
-- [Claude Code](https://claude.ai/code) with an Anthropic API key
+- Un agente de IA compatible con slash commands (Claude Code, GitHub Copilot, etc.) con acceso a una API key
 
 ## Setup
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/your-username/portfolio.git
+# 1. Clonar el repo
+git clone https://github.com/blanquicet/portfolio.git
 cd portfolio
 
-# 2. Install dependencies
+# 2. Instalar dependencias
 pip install -r requirements.txt
 
-# 3. Initialize the database
-# Open Claude Code in this directory, then run:
+# 3. Inicializar la base de datos
+# Abre el agente en este directorio y ejecuta:
 /setup
 ```
 
-## Commands
+## Comandos
 
-| Command | What it does |
-|---------|-------------|
-| `/setup` | Create or migrate the database |
-| `/ingest` | Ingest transactions from a PDF or screenshot |
-| `/snapshot` | Show current positions with live prices and P&L |
-| `/snapshot ibkr` | Snapshot filtered by broker |
-| `/tax 2024` | Colombia tax report for fiscal year 2024 |
+Estos son slash commands — compatibles con Claude Code, GitHub Copilot y otros agentes que soporten skills.
 
-## Tax Report
+| Comando | Qué hace |
+|---------|----------|
+| `/setup` | Crea o migra la base de datos |
+| `/ingest` | Ingesta transacciones desde un PDF o screenshot |
+| `/snapshot` | Muestra posiciones actuales con precios live y P&L |
+| `/snapshot ibkr` | Snapshot filtrado por broker |
+| `/tax 2024` | Reporte de renta para el año fiscal 2024 |
 
-The tax report is **hardcoded for Colombia**:
-- **Ganancia Ocasional** (occasional gain): assets held >730 days → flat 15%
-- **Renta Ordinaria** (ordinary income): assets held ≤730 days → progressive rate
-- TRM (exchange rate) from Banco de la República
-- UVT from DIAN (updated annually in `tools/tax_report.py`)
+## Reporte de Renta
 
-## Ticker Resolution
+El reporte está **hardcodeado para Colombia**:
+- **Ganancia Ocasional**: activos mantenidos más de 730 días
+- **Renta Ordinaria**: activos mantenidos 730 días o menos
+- TRM (tasa de cambio) desde Banco de la República
+- UVT desde DIAN (actualizado anualmente en `tools/tax_report.py`)
 
-When a new security is ingested, the system tries to resolve its Yahoo Finance ticker automatically via ISIN. If it can't (ambiguous or Yahoo search fails), Claude will ask you:
+El sistema clasifica cada venta — cuánto pagar lo determina la ley vigente.
 
-1. Which exchange the instrument trades on (e.g., LSE, NASDAQ, XETRA)
-2. Or the Yahoo Finance ticker directly (search at finance.yahoo.com)
+## Resolución de Tickers
 
-Resolved tickers are saved in the local database — you won't be asked again.
+Cuando se ingesta un nuevo instrumento, el sistema intenta resolver automáticamente su ticker de Yahoo Finance a partir del ISIN. Si no puede (ambigüedad o falla de búsqueda), el agente te pregunta:
 
-## TRM Manual Fallback
+1. En qué bolsa opera el instrumento (ej. LSE, NASDAQ, XETRA)
+2. O directamente el ticker de Yahoo Finance (búscalo en finance.yahoo.com)
 
-If the Banco de la República API is unavailable, Claude will ask you to download TRM rates manually:
+Los tickers resueltos se guardan en la base de datos local — no te volverá a preguntar.
 
-1. Go to: https://suameca.banrep.gov.co/estadisticas-economicas/informacionSerie/1/tasa_cambio_peso_colombiano_trm_dolar_usd
-2. Switch to "Tabla" view
-3. Select the dates of interest and download
-4. Run: `python3 tools/load_trm.py <downloaded_file.txt>`
+## Fallback Manual TRM
 
-## Data Privacy
+Si la API del Banco de la República no está disponible, el agente te indicará descargar las tasas manualmente:
 
-Your portfolio data stays local. `portfolio.db` is in `.gitignore` and never committed. Only generic code and SQL schemas are tracked in git.
+1. Ve a: https://suameca.banrep.gov.co/estadisticas-economicas/informacionSerie/1/tasa_cambio_peso_colombiano_trm_dolar_usd
+2. Cambia a vista "Tabla"
+3. Selecciona las fechas de interés y descarga
+4. Ejecuta: `python3 tools/load_trm.py <archivo_descargado.txt>`
+
+## Privacidad
+
+Tus datos de portafolio quedan locales. `portfolio.db` está en `.gitignore` y nunca se sube al repositorio. Solo código genérico y schemas SQL van en git.
