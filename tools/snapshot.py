@@ -10,8 +10,7 @@ Usage:
 Price source: Yahoo Finance (yfinance).
   - Currency per ticker is read from Yahoo's own `info['currency']` field.
   - USD prices → used directly.
-  - GBP prices → × GBPUSD  (e.g. CLIM.L is genuinely in GBP, not GBp).
-  - EUR prices → × EURUSD  (e.g. MC.PA).
+  - EUR prices → × EURUSD  (e.g. MC.PA, WBTC.PA).
   - All market values summed in USD for portfolio totals.
 
 EUR/USD transfer note:
@@ -30,8 +29,8 @@ DB = os.path.join(os.path.dirname(__file__), "..", "portfolio.db")
 
 # ISIN → Yahoo Finance ticker
 # Verified: Yahoo returns the correct currency via info['currency'] per ticker.
-# LSE ETFs suffixed .L — most are USD share classes (Yahoo confirms USD).
-# Only CLIM.L is GBP. MC.PA is EUR.
+# LSE ETFs suffixed .L — all are USD share classes (Yahoo confirms USD).
+# Euronext Paris *.PA — all EUR-quoted.
 TICKER_MAP = {
     # ── US stocks (USD)
     "US00724F1012": "ADBE",
@@ -103,17 +102,16 @@ def fetch_prices(isins: list) -> tuple:
     Returns:
         prices  : {isin: price_in_usd}   — all values normalised to USD
         display : {isin: (price_native, yahoo_ccy)}  — for showing native price
-        fx      : {'EURUSD': float, 'GBPUSD': float}
+        fx      : {'EURUSD': float}
     """
-    # FX rates
+    # FX rates — only EUR/USD needed (no GBP positions)
     fx_data = yf.download(
-        ["EURUSD=X", "GBPUSD=X"], period="2d", progress=False, auto_adjust=True
+        ["EURUSD=X"], period="2d", progress=False, auto_adjust=True
     )
-    fx = {"EURUSD": 1.12, "GBPUSD": 1.27}
+    fx = {"EURUSD": 1.12}
     if not fx_data.empty:
         closes = fx_data["Close"]
         fx["EURUSD"] = float(closes["EURUSD=X"].dropna().iloc[-1])
-        fx["GBPUSD"] = float(closes["GBPUSD=X"].dropna().iloc[-1])
 
     # Build ticker list
     isin_to_ticker = {i: TICKER_MAP[i] for i in isins if i in TICKER_MAP}
@@ -159,8 +157,6 @@ def fetch_prices(isins: list) -> tuple:
         yahoo_ccy = ticker_ccy.get(ticker, "USD")
         if yahoo_ccy == "USD":
             price_usd = raw_price
-        elif yahoo_ccy == "GBP":
-            price_usd = raw_price * fx["GBPUSD"]
         elif yahoo_ccy == "EUR":
             price_usd = raw_price * fx["EURUSD"]
         else:
@@ -191,7 +187,6 @@ def run(broker=None):
     isins = [r["isin"] for r in rows]
     prices, display_map, fx = fetch_prices(isins)
     eurusd = fx["EURUSD"]
-    gbpusd = fx["GBPUSD"]
     print(f"done  (EUR/USD {eurusd:.4f})")
 
     # ── First pass: compute market values for portfolio total
