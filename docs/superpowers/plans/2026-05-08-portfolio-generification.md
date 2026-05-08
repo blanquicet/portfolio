@@ -1794,3 +1794,46 @@ git commit -m "chore: post-migration verification complete — portfolio repo ge
 **No placeholders found.** All steps contain exact code, commands, and expected output.
 
 **Type consistency:** `load_ticker_map_from_db(conn)` defined in Task 5 and used in Task 5 only. `find_duplicate(conn, data)` defined and used in Task 6. `normalize_exchange`, `lookup_db`, `save_mapping` defined and tested in Task 2. All consistent.
+
+---
+
+## Post-Implementation Decisions
+
+Decisions made during implementation that deviate from or clarify the original plan.
+
+### D1: Multi-exchange snapshot simplified to `{isin: ticker}` map
+
+**Original plan (Task 5):** `load_ticker_map_from_db` returns `{isin: ticker}` — simple, one ticker per ISIN.
+
+**Mid-implementation detour:** After review, snapshot.py was temporarily changed to use `{(isin, exchange): ticker}` with GROUP BY `(security_id, exchange)` to support the same ISIN on two active exchanges. This added subqueries, double `{broker_filter}` placeholders, and `(isin, exchange)` tuple keys throughout `fetch_prices` and `run()`.
+
+**Decision (reverted):** The multi-exchange snapshot complexity was removed. Reasons:
+- The case of a single investor holding the same ISIN simultaneously on two different exchanges is practically non-existent for the Colombian retail audience.
+- Transfers between brokers change the broker, not the exchange — so the "same ISIN, two exchanges" scenario doesn't arise from transfers.
+- The added complexity (subqueries, tuple keys, NULL exchange edge cases) outweighed the theoretical benefit.
+
+**Final state:** `load_ticker_map_from_db` returns `{isin: ticker}`, preferring `source='manual'` over `'auto'` when multiple entries exist for the same ISIN (ORDER BY determinism). The `ticker_mappings` PK remains `(isin, exchange)` — this is still correct for the resolver — but snapshot reads tickers by ISIN only.
+
+### D2: `migrate.py` backfill uses no embedded TICKER_MAP
+
+**Original plan (Task 4):** `migrate.py` imports `TICKER_MAP` from `snapshot.py` at runtime before it's deleted.
+
+**Issue:** After Task 5 deleted `TICKER_MAP` from `snapshot.py`, the import fails silently and backfill is skipped.
+
+**First fix (reverted):** Embedded `_HISTORICAL_TICKER_MAP` as a 44-entry static constant in `migrate.py`. This reintroduced a personal ticker seed file in tracked code — exactly what the PRD says is OUT of scope.
+
+**Final state:** `migrate.py` has no embedded ticker map. The backfill step in `main()` is replaced by a verification step: it checks if `ticker_mappings` is populated and prints a hint if empty. New users populate `ticker_mappings` organically via `/ingest` + `resolve_ticker.py`. Existing users (like the repo owner) ran `migrate.py` before deleting `TICKER_MAP`, so their DB is already populated.
+
+### D3: `resolve_ticker.py` enforces MIC — unknown exchange exits 2
+
+**Original plan:** `normalize_exchange` returned `raw.upper()` for unknown exchanges with a warning.
+
+**Final state:** Unknown exchange codes call `sys.exit(2)` — same exit code as "missing exchange" — with a message listing known MIC codes. This forces the skill to ask the user for a valid exchange before saving bad data to the DB. Test updated from `test_normalize_exchange_unknown_returns_upper` → `test_normalize_exchange_unknown_raises_systemexit`.
+
+### D4: `load_fx.py` adds `--file` flag for local CSV ingestion
+
+**Not in original plan.** Added to close the loop on the ECB fallback: the fallback message tells the user to download a CSV, and `--file` + `--pairs` provides the command to ingest it. Without this, the fallback was incomplete (download instructions with no way to load the file).
+
+### D5: `migrate.py` LSE currency = USD (not GBP)
+
+The `_SUFFIX_TO_MIC` inference for `.L` tickers was briefly changed to GBP, then reverted to USD. iShares ETFs on LSE (IWDA.L, CSPX.L, etc.) are USD share classes — Yahoo Finance `fast_info.currency` returns `"USD"` for them. The `currency` field in `ticker_mappings` reflects what Yahoo reports, not the exchange's quoting currency (GBp).
