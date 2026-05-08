@@ -18,11 +18,14 @@ cd portfolio
 
 # 2. Instalar dependencias
 pip3 install -r requirements.txt
-
-# 3. Inicializar la base de datos
-# Abre el agente en este directorio y dile:
-# "inicializa el portafolio" o "setup portfolio"
 ```
+
+Abre el agente en el directorio `portfolio/` y empieza directo:
+
+- "Agrega estas compras" (adjuntando un PDF, Excel o imagen de tu broker)
+- "Registra esta transacción: compré 10 AAPL a $150 el 3 de enero"
+
+La base de datos se crea automáticamente en el primer uso.
 
 ## Cómo usarlo
 
