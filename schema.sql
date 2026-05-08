@@ -58,7 +58,7 @@ SELECT
     s.name AS security,
     s.type,
     SUM(CASE
-        WHEN t.type IN ('buy', 'transfer_in', 'vesting') THEN t.quantity
+        WHEN t.type IN ('buy', 'transfer_in', 'vesting', 'split') THEN t.quantity
         WHEN t.type IN ('sell', 'sell_to_cover', 'transfer_out') THEN -t.quantity
         ELSE 0
     END) AS shares,

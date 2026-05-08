@@ -33,16 +33,23 @@ def fx(conn, from_ccy, to_ccy, dt):
     return row[0] if row else None
 
 
+import sys
+
 def to_usd(conn, amount, ccy, dt):
     """Convert amount in ccy → USD at historical rate on dt."""
     if ccy == "USD":
         return amount
     if ccy == "EUR":
         rate = fx(conn, "EUR", "USD", dt)
+        if rate is None:
+            print(f"  ⚠ to_usd: no EUR/USD rate for {dt}", file=sys.stderr)
         return amount * rate if rate else None
     if ccy == "GBP":
         rate = fx(conn, "GBP", "USD", dt)
+        if rate is None:
+            print(f"  ⚠ to_usd: no GBP/USD rate for {dt}", file=sys.stderr)
         return amount * rate if rate else None
+    print(f"  ⚠ to_usd: unsupported currency '{ccy}' on {dt} — returning None", file=sys.stderr)
     return None
 
 
@@ -117,11 +124,12 @@ def build_queues(conn, as_of_date=None):
     as_of_date: ISO string 'YYYY-MM-DD'. If given, only transactions
                 up to that date are included. Defaults to today.
     """
-    date_filter = as_of_date or "date('now')"
     if as_of_date:
-        date_clause = f"AND t.date <= '{as_of_date}'"
+        date_clause = "AND t.date <= ?"
+        params = [as_of_date]
     else:
         date_clause = "AND t.date <= date('now')"
+        params = []
 
     rows = conn.execute(f"""
         SELECT
@@ -133,7 +141,7 @@ def build_queues(conn, as_of_date=None):
         WHERE t.type IN ('buy','vesting','sell','sell_to_cover','transfer_in','transfer_out')
           {date_clause}
         ORDER BY t.date, t.id
-    """).fetchall()
+    """, params).fetchall()
 
     queues = defaultdict(FifoQueue)
     errors = []

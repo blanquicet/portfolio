@@ -98,7 +98,7 @@ def run():
 
     # 3. Procesar año fiscal en orden: agregar buys a cola, reportar ventas
     results = []
-    fifo_errors = []
+    # Acumular (no resetear) — fifo_errors ya contiene errores del estado inicial
 
     for r in year_rows:
         isin = r["isin"]
@@ -169,6 +169,7 @@ def run():
 
             costo_usd_total = 0.0
             costo_cop_total = 0.0
+            costo_cop_incompleto = False   # True si algún lote no tiene TRM de compra
             lot_detail = []
 
             for (lot_qty, lot_price_usd, buy_date, lot_src) in lots_consumed:
@@ -180,8 +181,10 @@ def run():
                 costo_lote_cop = costo_lote_usd * trm_compra if trm_compra else None
 
                 costo_usd_total += costo_lote_usd
-                if costo_lote_cop:
+                if costo_lote_cop is not None:
                     costo_cop_total += costo_lote_cop
+                else:
+                    costo_cop_incompleto = True
 
                 lot_detail.append({
                     "buy_date":  buy_date,
@@ -196,16 +199,70 @@ def run():
                 })
 
             ganancia_usd = ingreso_usd - costo_usd_total
-            ganancia_cop = (ingreso_cop - costo_cop_total) if (ingreso_cop and costo_cop_total) else None
+            if costo_cop_incompleto:
+                # Marcar como estimado: falta TRM de al menos un lote de compra
+                ganancia_cop = None
+                fifo_errors.append(
+                    f"⚠ Costo COP incompleto: {name} {sell_date} — "
+                    f"falta TRM de al menos un lote de compra. Ganancia COP no calculada."
+                )
+            else:
+                ganancia_cop = (ingreso_cop - costo_cop_total) if ingreso_cop is not None else None
 
             all_corto = all(not d["largo"] for d in lot_detail)
             all_largo = all(d["largo"] for d in lot_detail)
+
             if all_largo:
-                clasificacion = "OCASIONAL"
+                # Todos OCASIONAL — una sola entrada
+                results.append({
+                    "isin": isin, "name": name, "type": typ,
+                    "sell_date": sell_date, "qty": sell_qty,
+                    "ingreso_usd": ingreso_usd, "trm_venta": trm_venta,
+                    "ingreso_cop": ingreso_cop, "costo_usd": costo_usd_total,
+                    "costo_cop": costo_cop_total, "ganancia_usd": ganancia_usd,
+                    "ganancia_cop": ganancia_cop, "clasificacion": "OCASIONAL",
+                    "lots": lot_detail,
+                })
             elif all_corto:
-                clasificacion = "ORDINARIA"
+                # Todos ORDINARIA — una sola entrada
+                results.append({
+                    "isin": isin, "name": name, "type": typ,
+                    "sell_date": sell_date, "qty": sell_qty,
+                    "ingreso_usd": ingreso_usd, "trm_venta": trm_venta,
+                    "ingreso_cop": ingreso_cop, "costo_usd": costo_usd_total,
+                    "costo_cop": costo_cop_total, "ganancia_usd": ganancia_usd,
+                    "ganancia_cop": ganancia_cop, "clasificacion": "ORDINARIA",
+                    "lots": lot_detail,
+                })
             else:
-                clasificacion = "MIXTO"
+                # MIXTO: dividir en dos entradas, una por plazo.
+                # El ingreso se prorratea por cantidad de cada grupo.
+                for plazo_label, largo_flag in [("OCASIONAL", True), ("ORDINARIA", False)]:
+                    sub_lots = [d for d in lot_detail if d["largo"] == largo_flag]
+                    if not sub_lots:
+                        continue
+                    sub_qty       = sum(d["qty"] for d in sub_lots)
+                    frac          = sub_qty / sell_qty
+                    sub_ing_usd   = ingreso_usd * frac
+                    sub_ing_cop   = (ingreso_cop * frac) if ingreso_cop is not None else None
+                    sub_costo_usd = sum(d["costo_usd"] for d in sub_lots)
+                    sub_costo_cop = sum(d["costo_cop"] or 0 for d in sub_lots)
+                    sub_cop_incompleto = any(d["costo_cop"] is None for d in sub_lots)
+                    sub_gan_usd   = sub_ing_usd - sub_costo_usd
+                    if sub_cop_incompleto:
+                        sub_gan_cop = None
+                    else:
+                        sub_gan_cop = (sub_ing_cop - sub_costo_cop) if sub_ing_cop is not None else None
+                    results.append({
+                        "isin": isin, "name": name, "type": typ,
+                        "sell_date": sell_date, "qty": sub_qty,
+                        "ingreso_usd": sub_ing_usd, "trm_venta": trm_venta,
+                        "ingreso_cop": sub_ing_cop, "costo_usd": sub_costo_usd,
+                        "costo_cop": sub_costo_cop, "ganancia_usd": sub_gan_usd,
+                        "ganancia_cop": sub_gan_cop, "clasificacion": plazo_label,
+                        "lots": sub_lots,
+                    })
+            continue  # skip the results.append() below
 
         results.append({
             "isin":         isin,
@@ -327,7 +384,7 @@ def run():
     print(f"  Colombia: > {DIAS_LARGO_PLAZO} días = Ganancia Ocasional (15%) | ≤ {DIAS_LARGO_PLAZO} días = Renta Ordinaria")
     print(f"{'='*W}\n")
 
-    totals = {"OCASIONAL": [0.0, 0.0], "ORDINARIA": [0.0, 0.0], "STC": [0.0, 0.0], "MIXTO": [0.0, 0.0]}
+    totals = {"OCASIONAL": [0.0, 0.0], "ORDINARIA": [0.0, 0.0], "STC": [0.0, 0.0]}
 
     for r in results:
         if r["clasificacion"] == "STC" and not SHOW_STC:
@@ -340,7 +397,7 @@ def run():
 
         sign  = "✅" if gn_u >= 0 else "🔴"
         tag   = {"OCASIONAL": "🟡 OCASIONAL", "ORDINARIA": "🔵 ORDINARIA",
-                  "STC":      "⚪ STC",        "MIXTO":     "⚠️  MIXTO"}[clsf]
+                  "STC":      "⚪ STC"}[clsf]
 
         print(f"  {sign} {tag}  │  {r['name'][:40]:<40}  │  {r['sell_date']}  │  {r['qty']:.4f} uds")
         print(f"     Ingreso :  ${r['ingreso_usd']:>12,.2f} USD  │  TRM venta {r['trm_venta']:>9,.2f}  │  ${r['ingreso_cop']:>16,.0f} COP")
@@ -370,8 +427,7 @@ def run():
     for clsf, (gu, gc) in totals.items():
         tag = {"OCASIONAL": "15% flat — NO exógena",
                "ORDINARIA": "Progresiva — SÍ exógena",
-               "STC":       "Ganancia = $0 — ya en CIR MSFT",
-               "MIXTO":     "Ver detalle por lote"}[clsf]
+               "STC":       "Ganancia = $0 — ya en CIR MSFT"}[clsf]
         print(f"  {clsf:<16} ${gu:>+14,.2f} ${gc:>+19,.0f}   {tag}")
 
     total_u = sum(v[0] for v in totals.values())

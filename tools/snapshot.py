@@ -112,6 +112,9 @@ def fetch_prices(isins: list) -> tuple:
     if not fx_data.empty:
         closes = fx_data["Close"]
         fx["EURUSD"] = float(closes["EURUSD=X"].dropna().iloc[-1])
+    else:
+        print(f"  ⚠  yfinance: could not fetch EUR/USD — using fallback 1.12 (may be stale)",
+              file=sys.stderr)
 
     # Build ticker list
     isin_to_ticker = {i: TICKER_MAP[i] for i in isins if i in TICKER_MAP}
@@ -160,6 +163,8 @@ def fetch_prices(isins: list) -> tuple:
         elif yahoo_ccy == "EUR":
             price_usd = raw_price * fx["EURUSD"]
         else:
+            print(f"  ⚠  {ticker}: unexpected currency '{yahoo_ccy}' from Yahoo — using raw price as USD (likely wrong)",
+                  file=sys.stderr)
             price_usd = raw_price  # fallback
         prices[isin]  = price_usd
         display[isin] = (raw_price, yahoo_ccy)
@@ -175,8 +180,21 @@ def fetch_prices(isins: list) -> tuple:
 def run(broker=None):
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
-    bf = f"AND t.broker = '{broker}'" if broker else ""
-    rows = conn.execute(SQL.format(broker_filter=bf)).fetchall()
+
+    # Validate broker against known values in DB
+    if broker:
+        known = {r[0] for r in conn.execute("SELECT DISTINCT broker FROM transactions").fetchall()}
+        if broker not in known:
+            print(f"  ⚠  Unknown broker '{broker}'. Known: {sorted(known)}", file=sys.stderr)
+            conn.close()
+            sys.exit(1)
+
+    if broker:
+        rows = conn.execute(
+            SQL.format(broker_filter="AND t.broker = ?"), (broker,)
+        ).fetchall()
+    else:
+        rows = conn.execute(SQL.format(broker_filter="")).fetchall()
 
     # Build FIFO queues before closing connection
     fifo_queues, _ = build_queues(conn)
