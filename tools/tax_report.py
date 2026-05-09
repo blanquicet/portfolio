@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
 """
-Reporte de ganancias/pérdidas para declaración de renta Colombia 2025.
+Reporte de ganancias/pérdidas por venta de inversiones.
 
-Calcula per venta:
-  - Lotes FIFO que se consumieron
-  - Costo fiscal en COP (TRM del día de compra)
+Calcula por cada venta:
+  - Lotes FIFO consumidos
+  - Costo base en COP (TRM del día de compra)
   - Ingreso en COP (TRM del día de venta)
-  - Días de tenencia → Ganancia Ocasional (> 730 días) vs Renta Ordinaria (≤ 730)
+  - Días de tenencia → Largo plazo (> 730 días) vs Corto plazo (≤ 730 días)
   - Ganancia/pérdida en USD y COP
-
-Reglas fiscales:
-  - > 730 días → Ganancia Ocasional → 15% flat → NO entra en exógena
-  - ≤ 730 días → Renta Ordinaria → tarifa progresiva → SÍ entra en exógena
 
 Fuentes FX:
   - USD/COP: TRM Banco de la República (tabla fx_rates)
@@ -19,10 +15,12 @@ Fuentes FX:
   - EUR/COP: EUR/USD × TRM (derivado)
 
 Usage:
-    python3 tools/tax_report.py 2025              # tabla exógena (modo por defecto)
-    python3 tools/tax_report.py 2024              # otro año (tabla)
-    python3 tools/tax_report.py 2025 --summary    # vista resumida (no tabla)
-    python3 tools/tax_report.py 2025 --detail     # agrega detalle de lotes
+    python3 tools/tax_report.py 2025              # tabla por lote FIFO (por defecto)
+    python3 tools/tax_report.py 2024              # otro año
+    python3 tools/tax_report.py 2025 --summary    # vista resumida por venta
+    python3 tools/tax_report.py 2025 --detail     # agrega detalle de lotes en modo summary
+    python3 tools/tax_report.py 2025 --largo      # solo ventas de largo plazo
+    python3 tools/tax_report.py 2025 --corto      # solo ventas de corto plazo
 """
 import sqlite3, sys, os
 from datetime import datetime
@@ -35,7 +33,7 @@ YEAR = None
 DETAIL = False
 TABLE = True
 SHOW_STC = False
-FILTER = None   # None = todo, "ocasional", "ordinaria"
+FILTER = None   # None = todo, "largo", "corto"
 for arg in sys.argv[1:]:
     if arg == "--detail":
         DETAIL = True
@@ -45,22 +43,18 @@ for arg in sys.argv[1:]:
         TABLE = False
     elif arg == "--show-stc":
         SHOW_STC = True
-    elif arg in ("--ocasional", "--ordinaria"):
-        FILTER = arg[2:]   # "ocasional" | "ordinaria"
+    elif arg in ("--largo", "--corto"):
+        FILTER = arg[2:]   # "largo" | "corto"
     elif arg.isdigit() and len(arg) == 4:
         YEAR = int(arg)
 
 if YEAR is None:
-    print("Uso: python3 tools/tax_report.py <año> [--summary|--table] [--detail] [--ocasional] [--ordinaria] [--show-stc]")
+    print("Uso: python3 tools/tax_report.py <año> [--summary|--table] [--detail] [--largo] [--corto] [--show-stc]")
     print("  Ej: python3 tools/tax_report.py 2025")
     print("  Ej: python3 tools/tax_report.py 2025 --summary")
     sys.exit(1)
 
-DIAS_LARGO_PLAZO = 730  # > 730 días = Ganancia Ocasional Colombia
-UVT = {2024: 47065, 2025: 49799}
-UVT_VAL = UVT.get(YEAR, 49799)
-TOPE_EXOGENA_UVT  = 2400   # rentas de capital/no laborales
-TOPE_EXOGENA_COP  = TOPE_EXOGENA_UVT * UVT_VAL
+DIAS_LARGO_PLAZO = 730  # umbral de temporalidad: > 730 días = largo plazo
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -102,7 +96,6 @@ def run():
 
     # 3. Procesar año fiscal en orden: agregar buys a cola, reportar ventas
     results = []
-    # Acumular (no resetear) — fifo_errors ya contiene errores del estado inicial
 
     for r in year_rows:
         isin = r["isin"]
@@ -141,21 +134,18 @@ def run():
         sell_dt = datetime.strptime(sell_date, "%Y-%m-%d").date()
 
         # ── STC: costo = precio de venta (ganancia = $0).
-        #    Las acciones se adquirieron y vendieron el mismo día del vesting;
-        #    la ganancia laboral ya fue declarada por el empleador en el CIR.
-        #    Aplicar FIFO aquí implicaría doble tributación.
         if typ == "sell_to_cover":
             trm_compra = fx(conn, "USD", "COP", sell_date)
             lot_detail = [{
-                "buy_date":  sell_date,           # misma fecha: vest = venta
+                "buy_date":  sell_date,
                 "qty":       sell_qty,
                 "price_usd": ingreso_usd / sell_qty,
                 "dias":      0,
                 "largo":     False,
-                "costo_usd": ingreso_usd,         # costo = ingreso → ganancia = 0
+                "costo_usd": ingreso_usd,
                 "trm_c":     trm_compra,
                 "costo_cop": ingreso_cop,
-                "src":       "STC — costo=precio_vest",
+                "src":       "STC",
             }]
             costo_usd_total = ingreso_usd
             costo_cop_total = ingreso_cop or 0.0
@@ -173,7 +163,7 @@ def run():
 
             costo_usd_total = 0.0
             costo_cop_total = 0.0
-            costo_cop_incompleto = False   # True si algún lote no tiene TRM de compra
+            costo_cop_incompleto = False
             lot_detail = []
 
             for (lot_qty, lot_price_usd, buy_date, lot_src) in lots_consumed:
@@ -204,7 +194,6 @@ def run():
 
             ganancia_usd = ingreso_usd - costo_usd_total
             if costo_cop_incompleto:
-                # Marcar como estimado: falta TRM de al menos un lote de compra
                 ganancia_cop = None
                 fifo_errors.append(
                     f"⚠ Costo COP incompleto: {name} {sell_date} — "
@@ -217,31 +206,28 @@ def run():
             all_largo = all(d["largo"] for d in lot_detail)
 
             if all_largo:
-                # Todos OCASIONAL — una sola entrada
                 results.append({
                     "isin": isin, "name": name, "type": typ,
                     "sell_date": sell_date, "qty": sell_qty,
                     "ingreso_usd": ingreso_usd, "trm_venta": trm_venta,
                     "ingreso_cop": ingreso_cop, "costo_usd": costo_usd_total,
                     "costo_cop": costo_cop_total, "ganancia_usd": ganancia_usd,
-                    "ganancia_cop": ganancia_cop, "clasificacion": "OCASIONAL",
+                    "ganancia_cop": ganancia_cop, "clasificacion": "LARGO",
                     "lots": lot_detail,
                 })
             elif all_corto:
-                # Todos ORDINARIA — una sola entrada
                 results.append({
                     "isin": isin, "name": name, "type": typ,
                     "sell_date": sell_date, "qty": sell_qty,
                     "ingreso_usd": ingreso_usd, "trm_venta": trm_venta,
                     "ingreso_cop": ingreso_cop, "costo_usd": costo_usd_total,
                     "costo_cop": costo_cop_total, "ganancia_usd": ganancia_usd,
-                    "ganancia_cop": ganancia_cop, "clasificacion": "ORDINARIA",
+                    "ganancia_cop": ganancia_cop, "clasificacion": "CORTO",
                     "lots": lot_detail,
                 })
             else:
-                # MIXTO: dividir en dos entradas, una por plazo.
-                # El ingreso se prorratea por cantidad de cada grupo.
-                for plazo_label, largo_flag in [("OCASIONAL", True), ("ORDINARIA", False)]:
+                # MIXTO: dividir en dos entradas, una por plazo
+                for plazo_label, largo_flag in [("LARGO", True), ("CORTO", False)]:
                     sub_lots = [d for d in lot_detail if d["largo"] == largo_flag]
                     if not sub_lots:
                         continue
@@ -266,7 +252,7 @@ def run():
                         "ganancia_cop": sub_gan_cop, "clasificacion": plazo_label,
                         "lots": sub_lots,
                     })
-            continue  # skip the results.append() below
+            continue
 
         results.append({
             "isin":         isin,
@@ -287,22 +273,22 @@ def run():
 
     conn.close()
 
-    # ── Modo tabla (formato exógena — una fila por lote FIFO)
+    # ── Modo tabla (una fila por lote FIFO)
     if TABLE:
-        filtro_label = f" — solo {FILTER.upper()}" if FILTER else ""
-        HDR = (f"{'Instrumento':<36}  {'F.Venta':>10}  {'F.Compra':>10}  "
+        filtro_label = f" — solo {FILTER.upper()} PLAZO" if FILTER else ""
+        HDR = (f"{'Instrumento':<36}  {'F.Venta':>10}  {'F.Compra':>10}  {'Días':>5}  "
                f"{'Cant':>8}  {'Costo USD':>11}  {'Venta USD':>11}  {'Gan USD':>10}  "
                f"{'TRM Compra':>10}  {'Costo COP':>14}  {'TRM Venta':>10}  "
                f"{'Venta COP':>14}  {'Gan COP':>14}  {'Plazo':<10}")
         print(f"\n{'='*len(HDR)}")
-        print(f"  Tabla exógena — una fila por lote FIFO — Año fiscal {YEAR}{filtro_label}")
+        print(f"  Reporte de ganancias/pérdidas — una fila por lote FIFO — Año {YEAR}{filtro_label}")
         print(f"{'='*len(HDR)}\n")
         print(f"  {HDR}")
         print(f"  {'─'*len(HDR)}")
 
-        totals_t = {"OCASIONAL": [0.0, 0.0, 0.0, 0.0],   # gan_usd, gan_cop, venta_usd, venta_cop
-                    "ORDINARIA": [0.0, 0.0, 0.0, 0.0],
-                    "STC":       [0.0, 0.0, 0.0, 0.0]}
+        totals_t = {"LARGO": [0.0, 0.0, 0.0, 0.0],   # gan_usd, gan_cop, venta_usd, venta_cop
+                    "CORTO": [0.0, 0.0, 0.0, 0.0],
+                    "STC":   [0.0, 0.0, 0.0, 0.0]}
 
         for r in results:
             clsf = r["clasificacion"]
@@ -327,9 +313,10 @@ def run():
                 gan_usd   = venta_usd - costo_usd
                 gan_cop   = venta_cop - costo_cop
                 trm_c     = d["trm_c"] or 0.0
-                plazo     = "STC" if clsf == "STC" else ("OCASIONAL" if d["largo"] else "ORDINARIA")
+                dias      = d["dias"]
+                plazo     = "STC" if clsf == "STC" else ("LARGO" if d["largo"] else "CORTO")
 
-                print(f"  {name:<36}  {sell_date:>10}  {d['buy_date']:>10}  "
+                print(f"  {name:<36}  {sell_date:>10}  {d['buy_date']:>10}  {dias:>5}  "
                       f"{lot_qty:>8.4f}  {costo_usd:>11,.2f}  {venta_usd:>11,.2f}  {gan_usd:>+10,.2f}  "
                       f"{trm_c:>10,.2f}  {costo_cop:>14,.0f}  {trm_v:>10,.2f}  "
                       f"{venta_cop:>14,.0f}  {gan_cop:>+14,.0f}  {plazo:<10}")
@@ -340,55 +327,42 @@ def run():
                 totals_t[plazo][3] += venta_cop
 
         print(f"  {'─'*len(HDR)}")
-        # Totales por categoría
         for plazo, (gu, gc, vu, vc) in totals_t.items():
             if plazo == "STC" and not SHOW_STC:
                 continue
             if FILTER and plazo.lower() != FILTER and plazo != "STC":
                 continue
-            print(f"  {'TOTAL '+plazo:<36}  {'':>10}  {'':>10}  "
+            label = {"LARGO": f"LARGO (>{DIAS_LARGO_PLAZO}d)", "CORTO": f"CORTO (≤{DIAS_LARGO_PLAZO}d)", "STC": "STC"}[plazo]
+            print(f"  {'TOTAL '+label:<36}  {'':>10}  {'':>10}  {'':>5}  "
                   f"{'':>8}  {'':>11}  {vu:>11,.2f}  {gu:>+10,.2f}  "
                   f"{'':>10}  {'':>14}  {'':>10}  "
                   f"{vc:>14,.0f}  {gc:>+14,.0f}  {plazo:<10}")
 
-        # Total general
         total_gan_u = sum(v[0] for v in totals_t.values())
         total_gan_c = sum(v[1] for v in totals_t.values())
         total_ven_u = sum(v[2] for v in totals_t.values())
         total_ven_c = sum(v[3] for v in totals_t.values())
         print(f"  {'─'*len(HDR)}")
-        print(f"  {'TOTAL VENTAS':<36}  {'':>10}  {'':>10}  "
+        print(f"  {'TOTAL VENTAS':<36}  {'':>10}  {'':>10}  {'':>5}  "
               f"{'':>8}  {'':>11}  {total_ven_u:>11,.2f}  {total_gan_u:>+10,.2f}  "
               f"{'':>10}  {'':>14}  {'':>10}  "
               f"{total_ven_c:>14,.0f}  {total_gan_c:>+14,.0f}")
 
-        # ── Verificación tope exógena (solo rentas de capital = ORDINARIA)
-        ven_ord_cop = totals_t["ORDINARIA"][3]
-        tope_cop    = TOPE_EXOGENA_COP
-        print(f"\n  ── Verificación exógena (Art. resolución DIAN — rentas de capital/no laborales)")
-        print(f"  Ingresos brutos ORDINARIA:  ${ven_ord_cop:>16,.0f} COP")
-        print(f"  Tope {TOPE_EXOGENA_UVT:,} UVT × ${UVT_VAL:,}:  ${tope_cop:>16,.0f} COP")
-        if ven_ord_cop > tope_cop:
-            print(f"  ✅ SUPERA el tope — OBLIGADO a reportar exógena por rentas de capital")
-        else:
-            print(f"  ℹ️  No supera el tope — verificar otros ingresos no laborales")
-
         print(f"\n  Notas:")
-        print(f"  • UVT {YEAR}: ${UVT_VAL:,} COP")
+        print(f"  • Largo plazo: tenencia > {DIAS_LARGO_PLAZO} días  |  Corto plazo: ≤ {DIAS_LARGO_PLAZO} días")
         print(f"  • Una fila por lote FIFO. Venta USD/COP prorrateada por cantidad.")
         print(f"  • Costo COP = costo USD × TRM del día de COMPRA (Banco de la República)")
-        print(f"  • Venta COP = venta USD × TRM del día de VENTA")
-        print(f"  • Ganancia OCASIONAL (>730 días) NO cuenta para tope exógena\n")
+        print(f"  • Venta COP = venta USD × TRM del día de VENTA\n")
         return
 
-    # ── Imprimir
-    W = 130
+    # ── Modo summary
+    W = 120
     print(f"\n{'='*W}")
-    print(f"  Reporte de ganancias/pérdidas — Año fiscal {YEAR}")
-    print(f"  Colombia: > {DIAS_LARGO_PLAZO} días = Ganancia Ocasional (15%) | ≤ {DIAS_LARGO_PLAZO} días = Renta Ordinaria")
+    print(f"  Reporte de ganancias/pérdidas — Año {YEAR}")
+    print(f"  Temporalidad: largo plazo > {DIAS_LARGO_PLAZO} días  |  corto plazo ≤ {DIAS_LARGO_PLAZO} días")
     print(f"{'='*W}\n")
 
-    totals = {"OCASIONAL": [0.0, 0.0], "ORDINARIA": [0.0, 0.0], "STC": [0.0, 0.0]}
+    totals = {"LARGO": [0.0, 0.0], "CORTO": [0.0, 0.0], "STC": [0.0, 0.0]}
 
     for r in results:
         if r["clasificacion"] == "STC" and not SHOW_STC:
@@ -400,8 +374,8 @@ def run():
         gn_c  = r["ganancia_cop"] or 0.0
 
         sign  = "✅" if gn_u >= 0 else "🔴"
-        tag   = {"OCASIONAL": "🟡 OCASIONAL", "ORDINARIA": "🔵 ORDINARIA",
-                  "STC":      "⚪ STC"}[clsf]
+        tag   = {"LARGO": "🟡 LARGO PLAZO", "CORTO": "🔵 CORTO PLAZO",
+                  "STC":  "⚪ STC"}[clsf]
 
         print(f"  {sign} {tag}  │  {r['name'][:40]:<40}  │  {r['sell_date']}  │  {r['qty']:.4f} uds")
         trm_v_str = f"{r['trm_venta']:>9,.2f}" if r['trm_venta'] else f"{'sin TRM':>9}"
@@ -413,10 +387,10 @@ def run():
             print(f"     {'─'*100}")
             print(f"     {'Lote compra':<12} {'Qty':>8} {'P.costo USD':>12} {'Días':>6} {'Plazo':<12} {'Costo USD':>12} {'TRM compra':>12} {'Costo COP':>16}")
             for d in r["lots"]:
-                plazo = "OCASIONAL" if d["largo"] else "ORDINARIA"
+                plazo = f"LARGO (>{DIAS_LARGO_PLAZO}d)" if d["largo"] else f"CORTO (≤{DIAS_LARGO_PLAZO}d)"
                 cop_s = f"${d['costo_cop']:>14,.0f}" if d["costo_cop"] else "     sin TRM"
                 print(f"     {d['buy_date']:<12} {d['qty']:>8.4f} ${d['price_usd']:>11,.2f} "
-                      f"{d['dias']:>6} {plazo:<12} ${d['costo_usd']:>11,.2f} "
+                      f"{d['dias']:>6} {plazo:<14} ${d['costo_usd']:>11,.2f} "
                       f"{d['trm_c']:>12,.2f} {cop_s}")
         print()
 
@@ -427,18 +401,22 @@ def run():
     # ── Resumen
     print(f"  {'─'*W}")
     print(f"\n  RESUMEN {YEAR}\n")
-    print(f"  {'Categoría':<16} {'Ganancia USD':>15} {'Ganancia COP':>20}   Tratamiento fiscal")
-    print(f"  {'─'*80}")
+    print(f"  {'Temporalidad':<16} {'Días tenencia':>15} {'Ganancia USD':>15} {'Ganancia COP':>20}")
+    print(f"  {'─'*70}")
+    labels = {
+        "LARGO": f"> {DIAS_LARGO_PLAZO} días",
+        "CORTO": f"≤ {DIAS_LARGO_PLAZO} días",
+        "STC":   "0 días (STC)",
+    }
     for clsf, (gu, gc) in totals.items():
-        tag = {"OCASIONAL": "15% flat — NO exógena",
-               "ORDINARIA": "Progresiva — SÍ exógena",
-               "STC":       "Ganancia = $0 — ya en CIR MSFT"}[clsf]
-        print(f"  {clsf:<16} ${gu:>+14,.2f} ${gc:>+19,.0f}   {tag}")
+        if clsf == "STC" and not SHOW_STC:
+            continue
+        print(f"  {clsf:<16} {labels[clsf]:>15} ${gu:>+14,.2f} ${gc:>+19,.0f}")
 
     total_u = sum(v[0] for v in totals.values())
     total_c = sum(v[1] for v in totals.values())
-    print(f"  {'─'*80}")
-    print(f"  {'TOTAL':<16} ${total_u:>+14,.2f} ${total_c:>+19,.0f}")
+    print(f"  {'─'*70}")
+    print(f"  {'TOTAL':<16} {'':>15} ${total_u:>+14,.2f} ${total_c:>+19,.0f}")
 
     if fifo_errors:
         print(f"\n  ⚠  ADVERTENCIAS ({len(fifo_errors)}):")
@@ -446,10 +424,10 @@ def run():
             print(f"     • {e}")
 
     print(f"\n  Notas:")
+    print(f"  • Largo plazo: tenencia > {DIAS_LARGO_PLAZO} días  |  Corto plazo: ≤ {DIAS_LARGO_PLAZO} días")
     print(f"  • Costo en COP = precio USD × TRM del día de COMPRA (Banco de la República)")
     print(f"  • Ingreso en COP = ingreso USD × TRM del día de VENTA")
     print(f"  • FIFO puro: el lote más antiguo se vende primero")
-    print(f"  • transfer_in/out no crean lote nuevo (hereda costo original)")
     print(f"  • Usar --detail para ver lotes FIFO individuales por venta\n")
 
 
