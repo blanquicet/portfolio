@@ -49,6 +49,12 @@ def to_usd(conn, amount, ccy, dt):
         if rate is None:
             print(f"  ⚠ to_usd: no GBP/USD rate for {dt}", file=sys.stderr)
         return amount * rate if rate else None
+    if ccy == "COP":
+        rate = fx(conn, "USD", "COP", dt)
+        if rate is None:
+            print(f"  ⚠ to_usd: no USD/COP rate for {dt}", file=sys.stderr)
+            return None
+        return amount / rate
     print(f"  ⚠ to_usd: unsupported currency '{ccy}' on {dt} — returning None", file=sys.stderr)
     return None
 

@@ -3,21 +3,16 @@
 Portfolio snapshot — net positions with live prices, unrealized P&L, portfolio %.
 
 Usage:
-    python3 tools/snapshot.py            # all brokers combined
-    python3 tools/snapshot.py ibkr       # IBKR only
-    python3 tools/snapshot.py fidelity   # Fidelity only
+    python3 tools/snapshot.py                  # all brokers, values in USD
+    python3 tools/snapshot.py ibkr             # IBKR only, USD
+    python3 tools/snapshot.py trii             # Trii only, USD
+    python3 tools/snapshot.py trii cop         # Trii only, values in COP
 
 Price source: Yahoo Finance (yfinance).
-  - Currency per ticker is read from Yahoo's own `info['currency']` field.
   - USD prices → used directly.
-  - EUR prices → × EURUSD  (e.g. MC.PA, WBTC.PA).
-  - All market values summed in USD for portfolio totals.
-
-EUR/USD transfer note:
-  The `currency` in the DB is the instrument's TRADING currency, not the
-  broker account currency. A transfer (FOP) doesn't change that.
-  e.g. BTCWEUR stays EUR-denominated at both Scalable and IBKR.
-  IWDA.L is the USD share class on LSE — stays USD regardless of broker.
+  - EUR prices → × EURUSD.
+  - COP prices → ÷ USDCOP.
+  - All market values summed in the display currency (USD default, COP if requested).
 """
 import sqlite3, sys, os, warnings
 warnings.filterwarnings("ignore")
@@ -28,19 +23,26 @@ from fifo import build_queues
 DB = os.path.join(os.path.dirname(__file__), "..", "portfolio.db")
 
 
-def load_ticker_map_from_db(conn) -> dict:
+def load_ticker_map_from_db(conn, preferred_exchanges: list = None) -> dict:
     """
     Load {isin: ticker} from ticker_mappings.
-    Prefers source='manual' over 'auto' when multiple entries exist for the same ISIN.
+    If preferred_exchanges is given (e.g. ['XBOG']), those entries win over others.
+    Within same priority, manual beats auto.
     """
     rows = conn.execute(
-        "SELECT isin, ticker FROM ticker_mappings "
-        "ORDER BY CASE source WHEN 'manual' THEN 1 ELSE 0 END"
+        "SELECT isin, exchange, ticker, source FROM ticker_mappings"
     ).fetchall()
-    # Last write wins per isin — manual entries ordered last so they overwrite auto
+
+    preferred = set(preferred_exchanges or [])
+
+    def priority(row):
+        is_pref   = 1 if row[1] in preferred else 0
+        is_manual = 1 if row[3] == "manual"  else 0
+        return (is_pref, is_manual)
+
     result = {}
-    for row in rows:
-        result[row[0]] = row[1]
+    for row in sorted(rows, key=priority):
+        result[row[0]] = row[2]
     return result
 
 
@@ -64,54 +66,87 @@ ORDER BY s.currency DESC, s.name;
 """
 
 
+def _fetch_single(ticker: str) -> tuple:
+    """Fetch price and currency for a single ticker via fast_info."""
+    try:
+        info = yf.Ticker(ticker).fast_info
+        p   = getattr(info, "last_price", None)
+        ccy = getattr(info, "currency", "USD") or "USD"
+        if p and p > 0:
+            return float(p), ccy
+    except Exception:
+        pass
+    return None, "USD"
+
+
 def fetch_prices(isins: list, ticker_map: dict) -> tuple:
     """
-    isins: list of isin strings
-    ticker_map: {isin: ticker}
     Returns:
         prices  : {isin: price_in_usd}
         display : {isin: (price_native, yahoo_ccy)}
-        fx      : {'EURUSD': float}
+        fx      : {'EURUSD': float, 'USDCOP': float}
     """
-    fx_data = yf.download(
-        ["EURUSD=X"], period="2d", progress=False, auto_adjust=True
-    )
-    fx = {"EURUSD": 1.12}
-    if not fx_data.empty:
-        closes = fx_data["Close"]
-        fx["EURUSD"] = float(closes["EURUSD=X"].dropna().iloc[-1])
-    else:
-        print(f"  ⚠  yfinance: could not fetch EUR/USD — using fallback 1.12 (may be stale)",
-              file=sys.stderr)
+    # ── FX rates
+    fx = {"EURUSD": 1.12, "USDCOP": 4100.0}
+    try:
+        fx_raw = yf.download(["EURUSD=X", "COP=X"], period="2d",
+                             progress=False, auto_adjust=True)
+        if not fx_raw.empty:
+            closes = fx_raw["Close"]
+            try:
+                fx["EURUSD"] = float(closes["EURUSD=X"].dropna().iloc[-1])
+            except Exception:
+                pass
+            try:
+                fx["USDCOP"] = float(closes["COP=X"].dropna().iloc[-1])
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     isin_to_ticker = {i: ticker_map[i] for i in isins if i in ticker_map}
-    all_tickers = list(set(isin_to_ticker.values()))
+    all_tickers    = list(set(isin_to_ticker.values()))
 
     if not all_tickers:
         return {}, {}, fx
 
-    raw = yf.download(all_tickers, period="2d", progress=False, auto_adjust=True)
-    closes_raw = raw["Close"] if not raw.empty else None
+    # ── Batch download
+    ticker_price: dict = {}
+    ticker_ccy:   dict = {}
 
-    ticker_price = {}
-    ticker_ccy   = {}
+    try:
+        raw = yf.download(all_tickers, period="2d", progress=False, auto_adjust=True)
+        if not raw.empty:
+            closes_raw = raw["Close"]
+            for t in all_tickers:
+                try:
+                    col  = closes_raw[t] if len(all_tickers) > 1 else closes_raw
+                    last = col.dropna()
+                    if len(last) > 0:
+                        ticker_price[t] = float(last.iloc[-1])
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # ── Per-ticker fallback + currency lookup
     for t in all_tickers:
-        try:
-            if closes_raw is not None:
-                col = closes_raw[t] if hasattr(closes_raw, "__getitem__") else closes_raw
-                last = col.dropna() if hasattr(col, "dropna") else col
-                ticker_price[t] = float(last.iloc[-1])
-        except Exception:
-            pass
-        try:
-            info = yf.Ticker(t).fast_info
-            ccy = getattr(info, "currency", None)
-            if ccy is None:
-                ccy = yf.Ticker(t).info.get("currency", "USD")
-            ticker_ccy[t] = ccy
-        except Exception:
-            ticker_ccy[t] = "USD"
+        if t not in ticker_price:
+            p, ccy = _fetch_single(t)
+            if p:
+                ticker_price[t] = p
+                ticker_ccy[t]   = ccy
+                continue
+        # currency lookup (always)
+        if t not in ticker_ccy:
+            try:
+                info = yf.Ticker(t).fast_info
+                ccy  = getattr(info, "currency", None) or "USD"
+                ticker_ccy[t] = ccy
+            except Exception:
+                ticker_ccy[t] = "USD"
 
+    # ── Build output dicts
     prices  = {}
     display = {}
     for isin, ticker in isin_to_ticker.items():
@@ -123,26 +158,25 @@ def fetch_prices(isins: list, ticker_map: dict) -> tuple:
             price_usd = raw_price
         elif yahoo_ccy == "EUR":
             price_usd = raw_price * fx["EURUSD"]
+        elif yahoo_ccy == "COP":
+            price_usd = raw_price / fx["USDCOP"]
         else:
-            print(f"  ⚠  {ticker}: unexpected currency '{yahoo_ccy}' from Yahoo — using raw price as USD (likely wrong)",
-                  file=sys.stderr)
-            price_usd = raw_price
+            price_usd = raw_price   # best effort
         prices[isin]  = price_usd
         display[isin] = (raw_price, yahoo_ccy)
 
     unmapped = [i for i in isins if i not in ticker_map]
     if unmapped:
-        print(f"  ⚠  No ticker for {len(unmapped)} ISINs (positions likely closed).",
+        print(f"  ⚠  No ticker for {len(unmapped)} ISINs (positions likely closed or untickered).",
               file=sys.stderr)
 
     return prices, display, fx
 
 
-def run(broker=None):
+def run(broker=None, display_ccy="USD"):
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
 
-    # Validate broker against known values in DB
     if broker:
         known = {r[0] for r in conn.execute("SELECT DISTINCT broker FROM transactions").fetchall()}
         if broker not in known:
@@ -151,111 +185,145 @@ def run(broker=None):
             sys.exit(1)
 
     if broker:
-        rows = conn.execute(
-            SQL.format(broker_filter="AND t.broker = ?"), (broker,)
-        ).fetchall()
+        rows = conn.execute(SQL.format(broker_filter="AND t.broker = ?"), (broker,)).fetchall()
     else:
         rows = conn.execute(SQL.format(broker_filter="")).fetchall()
 
-    # Build FIFO queues before closing connection
     fifo_queues, _ = build_queues(conn)
-    ticker_map = load_ticker_map_from_db(conn)
+    BROKER_EXCHANGE = {"trii": ["XBOG"]}
+    preferred_ex    = BROKER_EXCHANGE.get(broker, []) if broker else []
+    ticker_map      = load_ticker_map_from_db(conn, preferred_exchanges=preferred_ex)
     conn.close()
 
     title = f"broker: {broker.upper()}" if broker else "all brokers"
     print(f"\n  Fetching live prices…", end=" ", flush=True)
     isins = [r["isin"] for r in rows]
     prices, display_map, fx = fetch_prices(isins, ticker_map)
-    eurusd = fx["EURUSD"]
-    print(f"done  (EUR/USD {eurusd:.4f})")
+    eurusd  = fx["EURUSD"]
+    usdcop  = fx["USDCOP"]
+    print(f"done  (EUR/USD {eurusd:.4f}  |  USD/COP {usdcop:,.0f})")
 
-    # ── First pass: compute market values for portfolio total
-    portfolio_usd = 0.0
+    # ── Conversion helper: price_usd → display currency
+    def to_display(usd_val):
+        if usd_val is None:
+            return None
+        return usd_val * usdcop if display_ccy == "COP" else usd_val
+
+    ccy_sym  = "COP" if display_ccy == "COP" else "USD"
+    ccy_mark = "$" if display_ccy == "USD" else ""
+
+    # ── First pass: totals
+    portfolio_disp = 0.0
     enriched = []
     for r in rows:
-        isin     = r["isin"]
-        qty      = r["net_qty"]
-        db_ccy   = r["db_ccy"]
+        isin   = r["isin"]
+        qty    = r["net_qty"]
+        db_ccy = r["db_ccy"]
 
-        price_usd     = prices.get(isin)
-        price_native, yahoo_ccy = display_map.get(isin, (None, None))
+        price_usd            = prices.get(isin)
+        price_native, y_ccy  = display_map.get(isin, (None, None))
+        avg_cost_usd         = fifo_queues[isin].avg_cost_usd() if isin in fifo_queues else None
+        mkt_val_usd          = qty * price_usd if price_usd is not None else None
+        mkt_val_disp         = to_display(mkt_val_usd)
 
-        # FIFO avg cost for remaining lots (already in USD, historical FX)
-        avg_cost_usd = fifo_queues[isin].avg_cost_usd() if isin in fifo_queues else None
-
-        # Market value in USD
-        mkt_val_usd = qty * price_usd if price_usd is not None else None
-        if mkt_val_usd:
-            portfolio_usd += mkt_val_usd
+        if mkt_val_disp is not None:
+            portfolio_disp += mkt_val_disp
 
         enriched.append({
-            "name":         r["security"],
-            "db_ccy":       db_ccy,
-            "yahoo_ccy":    yahoo_ccy,
-            "qty":          qty,
-            "avg_cost_usd": avg_cost_usd,  # USD, FIFO cost of remaining lots
-            "price_native": price_native,
-            "price_usd":    price_usd,
-            "mkt_val_usd":  mkt_val_usd,
+            "name":          r["security"],
+            "db_ccy":        db_ccy,
+            "yahoo_ccy":     y_ccy,
+            "qty":           qty,
+            "avg_cost_usd":  avg_cost_usd,
+            "avg_cost_disp": to_display(avg_cost_usd),
+            "price_native":  price_native,
+            "price_usd":     price_usd,
+            "mkt_val_disp":  mkt_val_disp,
         })
 
-    # ── Print
-    W = 110
+    # ── Header
+    W = 112
     print(f"\n{'='*W}")
-    print(f"  Portfolio snapshot — {title}")
-    print(f"  {__import__('datetime').date.today()}   "
-          f"Total market value: ${portfolio_usd:>12,.2f} USD")
+    print(f"  Portfolio snapshot — {title}  [{ccy_sym}]")
+    if display_ccy == "COP":
+        print(f"  {__import__('datetime').date.today()}   "
+              f"Total market value: {portfolio_disp:>15,.0f} COP")
+    else:
+        print(f"  {__import__('datetime').date.today()}   "
+              f"Total market value: ${portfolio_disp:>12,.2f} USD")
     print(f"{'='*W}")
-    print(f"\n  {'Security':<36} {'Ccy':>4}  {'Qty':>8}  "
-          f"{'AvgCost':>9}  {'Price':>9}  "
-          f"{'Mkt Val $':>12}  {'Unreal P&L $':>13}  {'P&L %':>7}  {'Port %':>7}")
+
+    if display_ccy == "COP":
+        print(f"\n  {'Acción':<36} {'Qty':>8}  "
+              f"{'Costo Avg':>13}  {'Precio':>13}  "
+              f"{'Valor Mkt':>15}  {'P&L':>13}  {'P&L %':>7}  {'Port %':>7}")
+    else:
+        print(f"\n  {'Security':<36} {'Ccy':>4}  {'Qty':>8}  "
+              f"{'AvgCost':>9}  {'Price':>9}  "
+              f"{'Mkt Val $':>12}  {'Unreal P&L $':>13}  {'P&L %':>7}  {'Port %':>7}")
     print(f"  {'-'*(W-2)}")
 
     cur_ccy = None
     for d in enriched:
-        if d["db_ccy"] != cur_ccy:
+        if display_ccy != "COP" and d["db_ccy"] != cur_ccy:
             cur_ccy = d["db_ccy"]
-            label = f"{cur_ccy} instruments"
-            print(f"\n  ── {label}")
+            print(f"\n  ── {cur_ccy} instruments")
 
         qty       = d["qty"]
         price_nat = d["price_native"]
         price_usd = d["price_usd"]
-        mv        = d["mkt_val_usd"]
-        yahoo_ccy = d["yahoo_ccy"] or d["db_ccy"]
+        mv        = d["mkt_val_disp"]
+        y_ccy     = d["yahoo_ccy"] or d["db_ccy"]
+        ac_disp   = d["avg_cost_disp"]
+        ac_usd    = d["avg_cost_usd"]
 
-        # Unrealized P&L — compute in USD so it's apples-to-apples
-        if d["avg_cost_usd"] is not None and price_usd is not None:
-            pnl_usd = (price_usd - d["avg_cost_usd"]) * qty
-            pnl_pct = (price_usd - d["avg_cost_usd"]) / d["avg_cost_usd"] * 100
-            pnl_str     = f"${pnl_usd:>+12,.0f}"
+        # P&L always in display currency
+        if ac_usd is not None and price_usd is not None:
+            pnl_usd = (price_usd - ac_usd) * qty
+            pnl_pct = (price_usd - ac_usd) / ac_usd * 100
+            pnl_disp = pnl_usd * usdcop if display_ccy == "COP" else pnl_usd
+            pnl_str     = f"{pnl_disp:>+13,.0f}" if display_ccy == "COP" else f"${pnl_usd:>+12,.0f}"
             pnl_pct_str = f"{pnl_pct:>+7.1f}%"
         else:
             pnl_str     = f"{'—':>13}"
             pnl_pct_str = f"{'—':>8}"
 
-        port_pct  = f"{mv/portfolio_usd*100:>7.1f}%" if mv else f"{'—':>8}"
-        mv_str    = f"${mv:>11,.2f}"  if mv is not None else f"{'—':>12}"
-        avg_str   = f"${d['avg_cost_usd']:>8.2f}" if d["avg_cost_usd"] else f"{'—':>9}"
-        # Show price in its Yahoo currency with label
-        if price_nat is not None:
-            pr_str = f"{price_nat:>7.2f} {yahoo_ccy}"
+        port_pct = f"{mv/portfolio_disp*100:>7.1f}%" if mv and portfolio_disp else f"{'—':>8}"
+
+        if display_ccy == "COP":
+            mv_str  = f"{mv:>15,.0f}" if mv is not None else f"{'—':>15}"
+            ac_str  = f"{ac_disp:>13,.0f}" if ac_disp else f"{'—':>13}"
+            pr_str  = f"{price_nat:>13,.0f}" if price_nat is not None else f"{'—':>13}"
+            print(f"  {d['name']:<36} {qty:>8.0f}  "
+                  f"{ac_str}  {pr_str}  "
+                  f"{mv_str}  {pnl_str}  {pnl_pct_str}  {port_pct}")
         else:
-            pr_str = f"{'—':>9}    "
+            mv_str  = f"${mv:>11,.2f}"  if mv  is not None else f"{'—':>12}"
+            ac_str  = f"${ac_usd:>8.2f}" if ac_usd else f"{'—':>9}"
+            pr_str  = f"{price_nat:>7.2f} {y_ccy}" if price_nat is not None else f"{'—':>9}    "
+            print(f"  {d['name']:<36} {d['db_ccy']:>4}  {qty:>8.3f}  "
+                  f"{ac_str}  {pr_str}  "
+                  f"{mv_str}  {pnl_str}  {pnl_pct_str}  {port_pct}")
 
-        print(f"  {d['name']:<36} {d['db_ccy']:>4}  {qty:>8.3f}  "
-              f"{avg_str}  {pr_str}  "
-              f"{mv_str}  {pnl_str}  {pnl_pct_str}  {port_pct}")
-
+    # ── Footer
     print(f"\n  {'─'*(W-2)}")
-    print(f"  {'TOTAL':<36}  {'':>4}  {'':>8}  {'':>9}  {'':>12}  "
-          f"${portfolio_usd:>11,.2f}  {'':>13}  {'':>8}  {'100.0%':>7}")
-    print(f"\n  Notes:")
-    print(f"  • Avg cost in USD = FIFO weighted avg of remaining (unsold) lots, converted at historical FX (fx_rates table).")
-    print(f"  • P&L computed in USD using historical cost basis — no live FX distortion.")
-    print(f"  • Positions with no buy/vesting (transfer-in only) show '—' avg cost.\n")
+    if display_ccy == "COP":
+        print(f"  {'TOTAL':<36} {'':>8}  {'':>13}  {'':>13}  "
+              f"{portfolio_disp:>15,.0f}  {'':>13}  {'':>8}  {'100.0%':>7}")
+        print(f"\n  Notas:")
+        print(f"  • Costo promedio = promedio ponderado FIFO de lotes vigentes, convertido a COP al TRM histórico.")
+        print(f"  • P&L calculado en COP usando costo histórico — sin distorsión de TRM actual.")
+    else:
+        print(f"  {'TOTAL':<36}  {'':>4}  {'':>8}  {'':>9}  {'':>12}  "
+              f"${portfolio_disp:>11,.2f}  {'':>13}  {'':>8}  {'100.0%':>7}")
+        print(f"\n  Notes:")
+        print(f"  • Avg cost in USD = FIFO weighted avg of remaining (unsold) lots, converted at historical FX.")
+        print(f"  • P&L computed in USD using historical cost basis — no live FX distortion.")
+    print()
 
 
 if __name__ == "__main__":
-    broker = sys.argv[1].lower() if len(sys.argv) > 1 else None
-    run(broker)
+    args       = [a.lower() for a in sys.argv[1:]]
+    broker     = next((a for a in args if a not in ("cop", "usd")), None)
+    display_ccy = "COP" if "cop" in args else "USD"
+    run(broker, display_ccy)

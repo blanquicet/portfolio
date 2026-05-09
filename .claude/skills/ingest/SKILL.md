@@ -80,6 +80,31 @@ For each unique ISIN:
 python3 tools/insert.py security '{"isin":"<isin>","name":"<name>","type":"<type>","currency":"<security_currency>"}'
 ```
 
+### ⚠️ ISIN sintético para doble listado (ej. USA + BVC)
+
+Si el mismo instrumento ya existe en la DB con su ISIN real (ej. NVDA `US67066G1040` en NASDAQ)
+**y** la nueva transacción es de ese mismo instrumento pero en otro exchange (ej. `NVDACO` en BVC/XBOG),
+**NO uses el ISIN original** — crea un security con ISIN sintético para evitar conflictos de ticker:
+
+```
+ISIN sintético = "XBOG:<nemotécnico>"   ej: "XBOG:NVDACO"
+nombre         = "<Nombre original> (BVC)"
+currency       = "COP"
+```
+
+```bash
+# 1. Crear security con ISIN sintético
+python3 tools/insert.py security '{"isin":"XBOG:NVDACO","name":"NVIDIA Corp (BVC)","type":"stock","currency":"COP"}'
+
+# 2. Registrar ticker manualmente (Yahoo usa sufijo CO + .CL para BVC)
+sqlite3 portfolio.db "INSERT OR REPLACE INTO ticker_mappings VALUES ('XBOG:NVDACO','XBOG','NVDACO.CL','COP','manual',datetime('now'));"
+
+# 3. Usar el ISIN sintético en las transacciones (Step 6)
+```
+
+**Regla práctica:** si `exchange == XBOG` y el ISIN ya existe en la DB con otro exchange → usar ISIN sintético.
+Los securities colombianos nativos (ISINs `COB...`) no tienen este problema.
+
 ## Step 4 — Resolve tickers
 
 For each unique ISIN, call:
