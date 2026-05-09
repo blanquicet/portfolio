@@ -7,7 +7,26 @@ description: "Ingestar transacciones de un broker — úsame cuando el usuario q
 
 > **Python:** Usa el binario más reciente disponible: `python3.13`, `python3.12`, `python3.11`, o `python3` si ya es ≥3.11. Substitúyelo donde veas `python3` en los comandos.
 
-The user has provided a PDF or screenshot from their broker.
+The user has provided a PDF, screenshot, or described transactions from their broker.
+
+## Precondition — convertir PDF a texto
+
+**IMPORTANTE:** Nunca envíes un PDF directamente al modelo — la mayoría de los modelos no lo soportan. Si el input es un PDF, conviértelo a texto primero:
+
+```bash
+# Opción 1 — pdftotext (recomendado, viene con poppler)
+pdftotext -layout <archivo.pdf> -
+
+# Opción 2 — si pdftotext no está instalado
+python3 -c "import pdfminer.high_level, sys; print(pdfminer.high_level.extract_text(sys.argv[1]))" <archivo.pdf>
+
+# Verificar que pdftotext está disponible
+which pdftotext || echo "no disponible — usar opción 2"
+```
+
+Si el input es una **imagen o screenshot**, sí puedes leerla directamente con el tool de lectura de imágenes del agente.
+
+Si el usuario describe las transacciones en texto libre, procede directamente con Step 1.
 
 ## Precondition — verificar DB
 
