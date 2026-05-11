@@ -67,7 +67,7 @@ def remaining_lots_with_buy_id(self):
    SELECT DISTINCT broker FROM transactions WHERE date <= ?
    ```
 3. Por cada broker: llama `build_queues(conn, as_of_date=as_of, broker=b)`
-4. Por cada lote en `queue.remaining_lots()`: extrae `qty, price_usd, dt, src, buy_id`
+4. Por cada lote en `queue.remaining_lots_with_buy_id()`: extrae `qty, price_usd, dt, src, buy_id`
 5. Recupera `sec_ccy` y `name` del security via JOIN en DB (usando `buy_id` → `transactions.security_id` → `securities`)
 6. Calcula costo en `sec_ccy` y costo COP (ver sección "Lógica de costo")
 7. Agrupa lotes por `(broker, sec_ccy)`
@@ -236,7 +236,7 @@ Resumen por broker
 
 | Acción | Archivo | Cambio |
 |---|---|---|
-| Modificar | `tools/fifo.py` | Dos cambios mínimos: parámetro `broker` en `build_queues`, `buy_id` en `remaining_lots()` |
+| Modificar | `tools/fifo.py` | Dos cambios mínimos: parámetro `broker` en `build_queues`, nuevo método `remaining_lots_with_buy_id()` en `FifoQueue` |
 | Crear | `tools/patrimonio.py` | Script nuevo |
 | Crear | `tests/test_patrimonio.py` | Tests |
 
