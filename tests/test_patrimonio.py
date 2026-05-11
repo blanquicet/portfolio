@@ -91,3 +91,11 @@ def test_remaining_lots_with_buy_id_returns_five_fields():
     # remaining_lots() original sigue devolviendo 4 campos
     lots_old = q.remaining_lots()
     assert len(lots_old[0]) == 4
+
+
+def test_build_queues_no_broker_returns_all_lots():
+    """build_queues sin broker= devuelve lotes de todos los brokers."""
+    conn = make_db_with_two_brokers()
+    queues_all, _ = build_queues(conn)
+    lots_all = queues_all['US0000000001'].remaining_lots()
+    assert len(lots_all) == 2  # broker_a (10 units) + broker_b (5 units)

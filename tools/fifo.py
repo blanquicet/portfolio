@@ -136,7 +136,7 @@ class FifoQueue:
                 if qty > 1e-6]
 
     def remaining_lots_with_buy_id(self):
-        """Return lots with qty > 0, including buy_id. Used by patrimonio.py."""
+        """Return lots with qty > 0 as (qty, price_usd, dt, source, buy_id) 5-tuples."""
         return [(qty, price_usd, dt, src, bid)
                 for qty, price_usd, dt, src, bid in self.lots
                 if qty > 1e-6]
