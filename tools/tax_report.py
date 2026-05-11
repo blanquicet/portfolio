@@ -34,9 +34,13 @@ DETAIL = False
 TABLE = True
 SHOW_STC = False
 FILTER = None   # None = todo, "largo", "corto"
+CSV_MODE = False
 for arg in sys.argv[1:]:
     if arg == "--detail":
         DETAIL = True
+    elif arg == "--csv":
+        CSV_MODE = True
+        TABLE = True   # CSV implica modo tabla
     elif arg == "--table":
         TABLE = True
     elif arg == "--summary":
@@ -119,6 +123,7 @@ def run():
         sell_total = r["total"]
         sell_ccy   = r["t_ccy"]
         fee        = r["fee"] or 0
+        broker     = r["broker"]
 
         # Ingreso neto en USD
         ingreso_usd = to_usd(conn, sell_total, sell_ccy, sell_date)
@@ -213,7 +218,7 @@ def run():
                     "ingreso_cop": ingreso_cop, "costo_usd": costo_usd_total,
                     "costo_cop": costo_cop_total, "ganancia_usd": ganancia_usd,
                     "ganancia_cop": ganancia_cop, "clasificacion": "LARGO",
-                    "lots": lot_detail,
+                    "broker": broker, "lots": lot_detail,
                 })
             elif all_corto:
                 results.append({
@@ -223,7 +228,7 @@ def run():
                     "ingreso_cop": ingreso_cop, "costo_usd": costo_usd_total,
                     "costo_cop": costo_cop_total, "ganancia_usd": ganancia_usd,
                     "ganancia_cop": ganancia_cop, "clasificacion": "CORTO",
-                    "lots": lot_detail,
+                    "broker": broker, "lots": lot_detail,
                 })
             else:
                 # MIXTO: dividir en dos entradas, una por plazo
@@ -250,7 +255,7 @@ def run():
                         "ingreso_cop": sub_ing_cop, "costo_usd": sub_costo_usd,
                         "costo_cop": sub_costo_cop, "ganancia_usd": sub_gan_usd,
                         "ganancia_cop": sub_gan_cop, "clasificacion": plazo_label,
-                        "lots": sub_lots,
+                        "broker": broker, "lots": sub_lots,
                     })
             continue
 
@@ -268,6 +273,7 @@ def run():
             "ganancia_usd": ganancia_usd,
             "ganancia_cop": ganancia_cop,
             "clasificacion":clasificacion,
+            "broker":       broker,
             "lots":         lot_detail,
         })
 
@@ -276,6 +282,71 @@ def run():
     # ── Modo tabla (una fila por lote FIFO)
     if TABLE:
         filtro_label = f" — solo {FILTER.upper()} PLAZO" if FILTER else ""
+
+        if CSV_MODE:
+            import csv as _csv
+            writer = _csv.writer(sys.stdout)
+            writer.writerow([
+                "Broker", "Instrumento", "F. Venta", "F. Compra", "Días",
+                "Cant", "Costo USD", "Venta USD", "Gan USD",
+                "TRM Compra", "Costo COP", "TRM Venta", "Venta COP", "Gan COP", "Plazo",
+            ])
+
+            totals_t = {"LARGO": [0.0]*4, "CORTO": [0.0]*4, "STC": [0.0]*4}
+            for r in results:
+                clsf = r["clasificacion"]
+                if clsf == "STC" and not SHOW_STC:
+                    continue
+                if FILTER and clsf.lower() != FILTER and clsf != "STC":
+                    continue
+                sell_date   = r["sell_date"]
+                name        = r["name"]
+                trm_v       = r["trm_venta"]
+                ingreso_usd = r["ingreso_usd"]
+                ingreso_cop = r["ingreso_cop"]
+                total_qty   = r["qty"]
+
+                for d in r["lots"]:
+                    lot_qty   = d["qty"]
+                    frac      = lot_qty / total_qty
+                    venta_usd = ingreso_usd * frac
+                    venta_cop = (ingreso_cop or 0) * frac
+                    costo_usd = d["costo_usd"]
+                    costo_cop = d["costo_cop"] or 0.0
+                    gan_usd   = venta_usd - costo_usd
+                    gan_cop   = venta_cop - costo_cop
+                    trm_c     = d["trm_c"] or 0.0
+                    dias      = d["dias"]
+                    plazo     = "STC" if clsf == "STC" else ("LARGO" if d["largo"] else "CORTO")
+
+                    writer.writerow([
+                        r["broker"].upper(), name, sell_date, d["buy_date"], dias,
+                        round(lot_qty, 4),
+                        round(costo_usd, 2), round(venta_usd, 2), round(gan_usd, 2),
+                        round(trm_c, 2), round(costo_cop, 0),
+                        round(trm_v, 2), round(venta_cop, 0), round(gan_cop, 0),
+                        plazo,
+                    ])
+                    totals_t[plazo][0] += gan_usd
+                    totals_t[plazo][1] += gan_cop
+                    totals_t[plazo][2] += venta_usd
+                    totals_t[plazo][3] += venta_cop
+
+            writer.writerow([])
+            for plazo, (gu, gc, vu, vc) in totals_t.items():
+                if plazo == "STC" and not SHOW_STC:
+                    continue
+                if FILTER and plazo.lower() != FILTER and plazo != "STC":
+                    continue
+                writer.writerow([f"TOTAL {plazo}", "", "", "", "", "", "", round(vu, 2), round(gu, 2),
+                                  "", "", "", round(vc, 0), round(gc, 0), plazo])
+            total_gu = sum(v[0] for v in totals_t.values())
+            total_gc = sum(v[1] for v in totals_t.values())
+            total_vu = sum(v[2] for v in totals_t.values())
+            total_vc = sum(v[3] for v in totals_t.values())
+            writer.writerow(["TOTAL VENTAS", "", "", "", "", "", "", round(total_vu, 2), round(total_gu, 2),
+                              "", "", "", round(total_vc, 0), round(total_gc, 0), ""])
+            return
         HDR = (f"{'Instrumento':<36}  {'F.Venta':>10}  {'F.Compra':>10}  {'Días':>5}  "
                f"{'Cant':>8}  {'Costo USD':>11}  {'Venta USD':>11}  {'Gan USD':>10}  "
                f"{'TRM Compra':>10}  {'Costo COP':>14}  {'TRM Venta':>10}  "

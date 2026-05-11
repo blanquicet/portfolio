@@ -320,6 +320,19 @@ def run(as_of):
               file=sys.stderr)
 
     groups = collect_lots(conn, as_of)
+
+    # Cargar precios manuales: {isin: (price, currency)}
+    manual_prices = {}
+    try:
+        for row in conn.execute(
+            "SELECT isin, price, currency FROM manual_prices WHERE date <= ? "
+            "ORDER BY date DESC", (as_of_str,)
+        ):
+            if row["isin"] not in manual_prices:
+                manual_prices[row["isin"]] = (row["price"], row["currency"])
+    except sqlite3.OperationalError:
+        pass
+
     conn.close()
 
     all_tickers = list({
@@ -329,16 +342,23 @@ def run(as_of):
         if lot["ticker"] is not None
     })
 
-    print(f"\n  Descargando precios históricos al {as_of_str}…", end=" ", flush=True)
+    print(f"\n  Descargando precios históricos al {as_of_str}…", end=" ", flush=True,
+          file=sys.stderr)
     price_map = fetch_historical_prices(all_tickers, as_of)
-    print("listo.")
+    print("listo.", file=sys.stderr)
 
     for (broker, sec_ccy), lots in groups.items():
         for lot in lots:
             ticker = lot["ticker"]
-            if ticker is None or ticker not in price_map:
+            # Precio Yahoo
+            if ticker is not None and ticker in price_map:
+                yahoo_price, yahoo_ccy = price_map[ticker]
+            # Fallback: precio manual por ISIN
+            elif lot["isin"] in manual_prices:
+                yahoo_price, yahoo_ccy = manual_prices[lot["isin"]]
+            else:
                 continue
-            yahoo_price, yahoo_ccy = price_map[ticker]
+            yahoo_price, yahoo_ccy = yahoo_price, yahoo_ccy  # no-op, mantiene flujo
             if yahoo_ccy is None:
                 yahoo_ccy = "USD"
             price_sec = to_sec_ccy_price(
@@ -356,7 +376,11 @@ def run(as_of):
                 elif sec_ccy == "COP":
                     lot["val_cop"] = lot["val_sec"]
 
-    _print_report(groups, as_of_str, trm_asof, eur_usd_asof)
+    csv_mode = "--csv" in sys.argv
+    if csv_mode:
+        _print_csv(groups, as_of_str, trm_asof, eur_usd_asof)
+    else:
+        _print_report(groups, as_of_str, trm_asof, eur_usd_asof)
 
 
 def _fmt(v, decimals=2, width=12):
@@ -366,6 +390,48 @@ def _fmt(v, decimals=2, width=12):
     if decimals == 0:
         return f"{v:>{width},.0f}"
     return f"{v:>{width},.{decimals}f}"
+
+
+def _print_csv(groups, as_of_str, trm_asof, eur_usd_asof):
+    """Emite el snapshot como CSV (stdout). Una fila por lote."""
+    import csv, sys as _sys
+
+    writer = csv.writer(_sys.stdout)
+    writer.writerow([
+        "Broker", "Moneda",
+        "Instrumento", "Fecha Compra", "Qty",
+        "Costo (Moneda)", "TRM Compra", "Costo COP",
+        "Precio 31 Dic", "Valor (Moneda)", "Valor COP",
+    ])
+
+    for (broker, sec_ccy), lots in sorted(groups.items()):
+        for lot in lots:
+            qty         = lot["qty"]
+            name        = lot.get("name", lot["isin"])
+            buy_date    = lot["buy_date"]
+            cost_sec    = lot.get("cost_sec")
+            trm_buy     = lot.get("trm_compra")
+            cost_cop    = lot.get("cost_cop")
+            price_asof  = lot.get("price_asof")
+            val_sec     = lot.get("val_sec")
+            val_cop     = lot.get("val_cop")
+
+            def _cv(v, d=2):
+                return round(v, d) if v is not None else ""
+
+            writer.writerow([
+                broker.upper(),
+                sec_ccy,
+                name,
+                buy_date,
+                round(qty, 4),
+                _cv(cost_sec),
+                _cv(trm_buy, 0) if sec_ccy != "COP" else "",
+                _cv(cost_cop, 0),
+                _cv(price_asof),
+                _cv(val_sec),
+                _cv(val_cop, 0),
+            ])
 
 
 def _print_report(groups, as_of_str, trm_asof, eur_usd_asof):
@@ -392,11 +458,11 @@ def _print_report(groups, as_of_str, trm_asof, eur_usd_asof):
         print(f"\n{broker.upper()} — {ccy_label}")
 
         if is_cop:
-            print(f"  {'Instrumento':<36} {'Fecha cmp':>10}  {'Qty':>8}  "
+            print(f"  {'Instrumento':<36} {'Fecha Compra':>12}  {'Qty':>8}  "
                   f"{'Costo COP':>15}  {'Precio 31 Dic':>13}  {'Valor COP':>15}")
         else:
-            print(f"  {'Instrumento':<36} {'Fecha cmp':>10}  {'Qty':>8}  "
-                  f"{'Costo '+ccy_label:>12}  {'TRM cmp':>8}  {'Costo COP':>15}  "
+            print(f"  {'Instrumento':<36} {'Fecha Compra':>12}  {'Qty':>8}  "
+                  f"{'Costo '+ccy_label:>12}  {'TRM Compra':>10}  {'Costo COP':>15}  "
                   f"{'Precio 31 Dic':>13}  {'Valor '+ccy_label:>12}  {'Valor COP':>15}")
         print(f"  {'─'*(W-2)}")
 
@@ -422,14 +488,14 @@ def _print_report(groups, as_of_str, trm_asof, eur_usd_asof):
                 missing_price_count += 1
 
             if is_cop:
-                print(f"  {lot['name']:<36} {lot['buy_date']:>10}  {lot['qty']:>8.3f}  "
+                print(f"  {lot['name']:<36} {lot['buy_date']:>12}  {lot['qty']:>8.3f}  "
                       f"{_fmt(lot['cost_sec'], 0, 15)}  "
                       f"{_fmt(lot['price_asof'], 0, 13)}  "
                       f"{_fmt(lot['val_cop'], 0, 15)}")
             else:
-                print(f"  {lot['name']:<36} {lot['buy_date']:>10}  {lot['qty']:>8.3f}  "
+                print(f"  {lot['name']:<36} {lot['buy_date']:>12}  {lot['qty']:>8.3f}  "
                       f"{_fmt(lot['cost_sec'], 2, 12)}  "
-                      f"{_fmt(trm_cmp, 0, 8)}  "
+                      f"{_fmt(trm_cmp, 0, 10)}  "
                       f"{_fmt(lot['cost_cop'], 0, 15)}  "
                       f"{_fmt(lot['price_asof'], 2, 13)}  "
                       f"{_fmt(lot['val_sec'], 2, 12)}  "
