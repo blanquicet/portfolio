@@ -99,3 +99,73 @@ def test_build_queues_no_broker_returns_all_lots():
     queues_all, _ = build_queues(conn)
     lots_all = queues_all['US0000000001'].remaining_lots()
     assert len(lots_all) == 2  # broker_a (10 units) + broker_b (5 units)
+
+
+# ── Tests Task 2: calc_lot_costs ──────────────────────────────────────────────
+
+def test_calc_lot_costs_usd_sec():
+    """Lote USD: cost_sec = price_usd * qty; cost_cop = cost_sec * TRM."""
+    from patrimonio import calc_lot_costs
+    result = calc_lot_costs(
+        qty=10.0, price_usd=100.0, sec_ccy="USD",
+        trm_compra=4000.0, eur_usd_compra=1.10
+    )
+    assert abs(result["cost_sec"] - 1000.0) < 0.01    # 10 * 100
+    assert abs(result["cost_cop"] - 4_000_000.0) < 1  # 1000 * 4000
+
+
+def test_calc_lot_costs_eur_sec():
+    """Lote EUR: cost_sec = cost_usd / EUR_USD; cost_cop = cost_usd * TRM."""
+    from patrimonio import calc_lot_costs
+    result = calc_lot_costs(
+        qty=10.0, price_usd=110.0, sec_ccy="EUR",
+        trm_compra=4000.0, eur_usd_compra=1.10
+    )
+    assert abs(result["cost_sec"] - 1000.0) < 0.01    # (10*110) / 1.10
+    assert abs(result["cost_cop"] - 4_400_000.0) < 1  # (10*110) * 4000
+
+
+def test_calc_lot_costs_cop_sec():
+    """Lote COP: cost_sec y cost_cop son iguales (price_usd * qty * TRM)."""
+    from patrimonio import calc_lot_costs
+    result = calc_lot_costs(
+        qty=100.0, price_usd=0.25, sec_ccy="COP",  # price_usd = 1000 COP / 4000 TRM
+        trm_compra=4000.0, eur_usd_compra=1.10
+    )
+    # cost_usd = 100 * 0.25 = 25; cost_cop = 25 * 4000 = 100_000
+    assert abs(result["cost_sec"] - 100_000.0) < 1
+    assert abs(result["cost_cop"] - 100_000.0) < 1
+
+
+def test_calc_lot_costs_partial_lot():
+    """Venta parcial: usa qty_remaining, no qty original."""
+    from patrimonio import calc_lot_costs
+    # Compró 10, vendió 4 → qty_remaining = 6
+    result = calc_lot_costs(
+        qty=6.0, price_usd=100.0, sec_ccy="USD",
+        trm_compra=4000.0, eur_usd_compra=1.10
+    )
+    assert abs(result["cost_sec"] - 600.0) < 0.01
+    assert abs(result["cost_cop"] - 2_400_000.0) < 1
+
+
+def test_calc_lot_costs_missing_trm():
+    """TRM None → cost_cop es None (no aborta)."""
+    from patrimonio import calc_lot_costs
+    result = calc_lot_costs(
+        qty=10.0, price_usd=100.0, sec_ccy="USD",
+        trm_compra=None, eur_usd_compra=1.10
+    )
+    assert result["cost_sec"] is not None
+    assert result["cost_cop"] is None
+
+
+def test_calc_lot_costs_missing_eur_usd():
+    """EUR/USD None para sec_ccy=EUR → cost_sec es None."""
+    from patrimonio import calc_lot_costs
+    result = calc_lot_costs(
+        qty=10.0, price_usd=110.0, sec_ccy="EUR",
+        trm_compra=4000.0, eur_usd_compra=None
+    )
+    assert result["cost_sec"] is None
+    assert result["cost_cop"] is not None   # cost_cop = cost_usd * TRM, no depende de EUR/USD
