@@ -41,22 +41,21 @@ AND t.broker = ?
 
 Esto aísla los lotes y consumos por broker. Los callers existentes (`snapshot.py`, `tax_report.py`) no pasan `broker` → comportamiento idéntico al actual.
 
-### 2. `remaining_lots()` expone `buy_id`
+### 2. Nuevo método `remaining_lots_with_buy_id()` en `FifoQueue`
 
-Cambiar de:
+`remaining_lots()` **no se modifica** — `avg_cost_usd()` y `oldest_buy_date()` desempaquetan 4 campos y siguen funcionando sin cambios.
+
+Se añade un método separado solo para `patrimonio.py`:
+
 ```python
-return [(qty, price_usd, dt, src)
-        for qty, price_usd, dt, src, _bid in self.lots
-        if qty > 1e-6]
-```
-A:
-```python
-return [(qty, price_usd, dt, src, bid)
-        for qty, price_usd, dt, src, bid in self.lots
-        if qty > 1e-6]
+def remaining_lots_with_buy_id(self):
+    """Return lots with qty > 0, incluyendo buy_id. Solo para patrimonio.py."""
+    return [(qty, price_usd, dt, src, bid)
+            for qty, price_usd, dt, src, bid in self.lots
+            if qty > 1e-6]
 ```
 
-Callers existentes que usan `remaining_lots()` (`snapshot.py` vía `avg_cost_usd()` y `oldest_buy_date()`) no llaman `remaining_lots()` directamente → no se rompen. Si algún caller hace tuple unpacking en 4 elementos, habrá que actualizarlo — verificar en la tarea de implementación.
+`patrimonio.py` llama `queue.remaining_lots_with_buy_id()` en vez de `remaining_lots()`.
 
 ---
 
@@ -208,7 +207,7 @@ TRII — COP
   Subtotal                                  2,150,000                                          289,000,000
 
 ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
-TOTAL COP     Costo: 42,954,948     Valor: 344,465,214
+TOTAL COP     Costo: 45,104,948     Valor: 344,465,214
 TRM al 2025-12-31: 4,380   |   EUR/USD: 1.0812
 ```
 
@@ -216,7 +215,7 @@ Notas de formato:
 - Sección COP omite columnas TRM y Costo/Valor en moneda extranjera
 - Qty con 3 decimales
 - Si precio no disponible: `—` en Precio, Valor moneda y Valor COP del lote; ese lote contribuye al Costo COP del subtotal pero no al Valor COP
-- TRM cmp = TRM del día de compra del lote (cada lote puede tener TRM distinta)
+- TRM cmp = USD/COP del día de compra del lote (siempre USD/COP, independiente de la moneda del activo). Cada lote puede tener TRM distinta.
 - Warnings (FX faltante, precio ausente) van a stderr — nunca interrumpen el output tabular
 - Si algún lote no tiene precio, el Gran Total Valor incluye nota: `(* excluye N lote(s) sin precio)`
 
@@ -228,7 +227,7 @@ Resumen por broker
   SCALABLE    Costo COP:   3,723,648   Valor COP:   5,139,014
   TRII        Costo COP:   2,150,000   Valor COP: 289,000,000
   ────────────────────────────────────────────────────────────
-  TOTAL       Costo COP:  45,105,948   Valor COP: 344,465,214
+  TOTAL       Costo COP:  45,104,948   Valor COP: 344,465,214
 ```
 
 ---
@@ -249,7 +248,7 @@ Resumen por broker
 
 1. **Lote único USD**: compra USD, verifica `cost_usd = price_usd × qty`, costo COP, valor al corte
 2. **Lote EUR nativo** (`sec_ccy=EUR`, `tx_ccy=EUR`): verifica `cost_eur`, conversión EUR→COP
-3. **Lote USD comprado en EUR** (`sec_ccy=USD`, `tx_ccy=EUR`): verifica `cost_usd = total_eur × EUR/USD_compra × qty_ratio`, costo COP
+3. **Lote USD comprado en EUR** (`sec_ccy=USD`, `tx_ccy=EUR`): verifica que `cost_usd = price_usd × qty_remaining` (price_usd ya calculado por `build_queues` vía `to_usd`) y que `cost_cop = cost_usd × TRM(dt_compra)`
 4. **Lote COP**: verifica que no aplica TRM ni conversión adicional
 5. **Venta parcial**: lote con 10 unidades, venta de 4 → `qty_remaining=6`, costo = `price_usd × 6`
 6. **Broker isolation**: mismo ISIN en dos brokers, verifica que los lotes no se mezclan
