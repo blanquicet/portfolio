@@ -166,20 +166,93 @@ def fetch_historical_prices(tickers, as_of):
     return result
 
 
+def _make_lot(conn, groups, ticker_map, isin, qty, price_usd, buy_date, buy_id, broker):
+    """
+    Crea un lot_dict y lo agrega a groups[(broker, sec_ccy)].
+    Helper interno de collect_lots.
+    """
+    row = conn.execute("""
+        SELECT s.name, s.currency
+        FROM transactions t
+        JOIN securities s ON s.id = t.security_id
+        WHERE t.id = ?
+    """, (buy_id,)).fetchone()
+
+    if row is None:
+        print(f"  ⚠ buy_id {buy_id} no encontrado en DB", file=sys.stderr)
+        return
+
+    name, sec_ccy = row[0], row[1]
+
+    trm_compra     = fx(conn, "USD", "COP", buy_date)
+    eur_usd_compra = fx(conn, "EUR", "USD", buy_date)
+
+    if trm_compra is None:
+        print(f"  ⚠ TRM no disponible para {buy_date} — costo COP será None",
+              file=sys.stderr)
+
+    costs = calc_lot_costs(qty, price_usd, sec_ccy, trm_compra, eur_usd_compra)
+
+    lot = {
+        "name":       name,
+        "isin":       isin,
+        "ticker":     ticker_map.get(isin),
+        "qty":        qty,
+        "price_usd":  price_usd,
+        "buy_date":   buy_date,
+        "sec_ccy":    sec_ccy,
+        "broker":     broker,
+        "trm_compra": trm_compra,
+        "cost_sec":   costs["cost_sec"],
+        "cost_cop":   costs["cost_cop"],
+        "price_asof": None,
+        "val_sec":    None,
+        "val_cop":    None,
+    }
+    groups.setdefault((broker, sec_ccy), []).append(lot)
+
+
 def collect_lots(conn, as_of):
     """
     Construye grupos {(broker, sec_ccy): [lot_dict]} para la fecha as_of.
 
+    Estrategia:
+    - FIFO global (sin filtro de broker) para que las ventas en broker B
+      encuentren los buys de broker A después de una transferencia FOP.
+    - El broker de cada lote se determina por net_qty al as_of:
+      el activo se muestra bajo el broker donde está físicamente.
+    - Si un ISIN tiene posición en múltiples brokers simultáneos
+      (compras directas en ambos, no FOP), los lotes FIFO se distribuyen
+      llenando la cuota del broker de mayor posición primero.
+
     lot_dict contiene:
         name, isin, ticker, qty, price_usd, buy_date,
-        cost_sec, cost_cop, sec_ccy, broker,
+        cost_sec, cost_cop, sec_ccy, broker, trm_compra,
         price_asof (None — relleno por run()), val_sec (None), val_cop (None)
     """
+    from collections import defaultdict
     as_of_str = str(as_of)
 
-    brokers = [r[0] for r in conn.execute(
-        "SELECT DISTINCT broker FROM transactions WHERE date <= ?", (as_of_str,)
-    ).fetchall()]
+    # Broker(s) activos por ISIN al as_of, ordenados por qty desc
+    net_rows = conn.execute("""
+        SELECT s.isin, t.broker,
+               ROUND(SUM(
+                   CASE WHEN t.type IN ('buy','vesting','transfer_in')      THEN  t.quantity
+                        WHEN t.type IN ('sell','sell_to_cover','transfer_out') THEN -t.quantity
+                        ELSE 0 END
+               ), 6) AS net_qty
+        FROM transactions t
+        JOIN securities s ON s.id = t.security_id
+        WHERE t.date <= ?
+        GROUP BY s.isin, t.broker
+        HAVING net_qty > 0.001
+        ORDER BY s.isin, net_qty DESC
+    """, (as_of_str,)).fetchall()
+
+    # {isin: [(broker, net_qty), ...]} — ya ordenado por qty desc
+    broker_qtys = defaultdict(list)
+    for isin, broker, net_qty in net_rows:
+        broker_qtys[isin].append((broker, net_qty))
 
     # Cargar ticker_mappings {isin: ticker} — manual gana sobre auto
     ticker_map = {}
@@ -188,54 +261,46 @@ def collect_lots(conn, as_of):
         if isin not in ticker_map or source == "manual":
             ticker_map[isin] = ticker
 
+    # FIFO global — sin filtro de broker para respetar transfers FOP
+    queues, errors = build_queues(conn, as_of_date=as_of_str)
+    for err in errors:
+        print(f"  ⚠ FIFO: {err}", file=sys.stderr)
+
     groups = {}
 
-    for broker in brokers:
-        queues, errors = build_queues(conn, as_of_date=as_of_str, broker=broker)
-        for err in errors:
-            print(f"  ⚠ FIFO: {err}", file=sys.stderr)
+    for isin, queue in queues.items():
+        fifo_lots = queue.remaining_lots_with_buy_id()
+        if not fifo_lots:
+            continue
 
-        for isin, queue in queues.items():
-            for qty, price_usd, buy_date, src, buy_id in queue.remaining_lots_with_buy_id():
-                row = conn.execute("""
-                    SELECT s.name, s.currency
-                    FROM transactions t
-                    JOIN securities s ON s.id = t.security_id
-                    WHERE t.id = ?
-                """, (buy_id,)).fetchone()
+        brokers_for_isin = broker_qtys.get(isin, [])
+        if not brokers_for_isin:
+            continue  # sin posición neta al as_of — lotes ya cerrados
 
-                if row is None:
-                    print(f"  ⚠ buy_id {buy_id} no encontrado en DB", file=sys.stderr)
-                    continue
+        if len(brokers_for_isin) == 1:
+            # Caso normal: todos los lotes van al único broker activo
+            broker = brokers_for_isin[0][0]
+            for qty, price_usd, buy_date, src, buy_id in fifo_lots:
+                _make_lot(conn, groups, ticker_map, isin, qty, price_usd, buy_date, buy_id, broker)
 
-                name, sec_ccy = row[0], row[1]
+        else:
+            # ISIN en múltiples brokers: distribuir lotes FIFO llenando
+            # la cuota del broker con más posición primero (oldest lots first)
+            quota_remaining = [q for _, q in brokers_for_isin]
+            broker_names    = [b for b, _ in brokers_for_isin]
+            broker_idx = 0
 
-                trm_compra     = fx(conn, "USD", "COP", buy_date)
-                eur_usd_compra = fx(conn, "EUR", "USD", buy_date)
-
-                if trm_compra is None:
-                    print(f"  ⚠ TRM no disponible para {buy_date} — costo COP será None",
-                          file=sys.stderr)
-
-                costs = calc_lot_costs(qty, price_usd, sec_ccy, trm_compra, eur_usd_compra)
-
-                lot = {
-                    "name":        name,
-                    "isin":        isin,
-                    "ticker":      ticker_map.get(isin),
-                    "qty":         qty,
-                    "price_usd":   price_usd,
-                    "buy_date":    buy_date,
-                    "sec_ccy":     sec_ccy,
-                    "broker":      broker,
-                    "trm_compra":  trm_compra,
-                    "cost_sec":    costs["cost_sec"],
-                    "cost_cop":    costs["cost_cop"],
-                    "price_asof":  None,
-                    "val_sec":     None,
-                    "val_cop":     None,
-                }
-                groups.setdefault((broker, sec_ccy), []).append(lot)
+            for qty, price_usd, buy_date, src, buy_id in fifo_lots:
+                lot_remaining = qty
+                while lot_remaining > 1e-6 and broker_idx < len(broker_names):
+                    take = min(lot_remaining, quota_remaining[broker_idx])
+                    if take > 1e-6:
+                        _make_lot(conn, groups, ticker_map, isin, take, price_usd,
+                                  buy_date, buy_id, broker_names[broker_idx])
+                    quota_remaining[broker_idx] -= take
+                    lot_remaining -= take
+                    if quota_remaining[broker_idx] < 1e-6:
+                        broker_idx += 1
 
     return groups
 
