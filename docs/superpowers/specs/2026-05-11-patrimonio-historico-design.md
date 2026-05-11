@@ -11,9 +11,18 @@
 ## Uso
 
 ```bash
-python3 tools/patrimonio.py 2025    # → snapshot al 2025-12-31
-python3 tools/patrimonio.py 2024    # → snapshot al 2024-12-31
+python3 tools/patrimonio.py 2025              # → snapshot al 2025-12-31
+python3 tools/patrimonio.py 2024              # → snapshot al 2024-12-31
+python3 tools/patrimonio.py --as-of 2025-06-30  # → snapshot a fecha arbitraria
 ```
+
+Si se pasa `--as-of YYYY-MM-DD`, ignora el argumento de año y usa esa fecha exacta. Si se pasa solo el año, la fecha de corte es `YYYY-12-31`.
+
+---
+
+## Compatibilidad con plan ticker-as-identifier
+
+Este script se implementa sobre la arquitectura actual: ISIN como identificador primario, tickers resueltos via `ticker_mappings`. El plan de migración ticker-as-identifier está escrito (`docs/superpowers/plans/2026-05-08-ticker-as-identifier.md`) pero no ejecutado. Si ese pivot se realiza en el futuro, `patrimonio.py` se actualiza entonces — no se diseña para ambas arquitecturas simultáneamente.
 
 ---
 
@@ -104,7 +113,7 @@ yf.download(tickers, start=as_of, end=as_of + timedelta(days=1),
             auto_adjust=False, progress=False)["Close"]
 ```
 
-`auto_adjust=False` para evitar sesgo por dividendos y splits en valoración histórica.
+`auto_adjust=False` para evitar sesgo por dividendos y splits en valoración histórica de patrimonio.
 
 **Fallback**: si Yahoo no devuelve precio en `as_of` exacto (fin de semana, feriado), ampliar ventana:
 ```python
@@ -113,6 +122,8 @@ yf.download(tickers, start=as_of - timedelta(days=7), end=as_of + timedelta(days
 Tomar el último `Close` disponible ≤ `as_of`.
 
 Si aún no hay precio: mostrar `—` en precio, valor moneda y valor COP para ese lote. El script no aborta.
+
+**Caso IWDA.L, CSPX.L y otros `.L` USD-class:** Yahoo Finance devuelve el precio en USD para estos tickers, aunque cotizan en LSE. `yahoo_ccy = "USD"` — no hay conversión GBp→GBP necesaria. Esto es consistente con la decisión existente de tratar LSE=USD para ETFs de clase USD.
 
 ---
 
@@ -206,6 +217,19 @@ Notas de formato:
 - Qty con 3 decimales
 - Si precio no disponible: `—` en Precio, Valor moneda y Valor COP del lote; ese lote contribuye al Costo COP del subtotal pero no al Valor COP
 - TRM cmp = TRM del día de compra del lote (cada lote puede tener TRM distinta)
+- Warnings (FX faltante, precio ausente) van a stderr — nunca interrumpen el output tabular
+- Si algún lote no tiene precio, el Gran Total Valor incluye nota: `(* excluye N lote(s) sin precio)`
+
+**Resumen por broker al final:**
+```
+Resumen por broker
+  FIDELITY    Costo COP:  21,082,500   Valor COP:  27,659,700
+  IBKR        Costo COP:  18,148,800   Valor COP:  22,666,500
+  SCALABLE    Costo COP:   3,723,648   Valor COP:   5,139,014
+  TRII        Costo COP:   2,150,000   Valor COP: 289,000,000
+  ────────────────────────────────────────────────────────────
+  TOTAL       Costo COP:  45,105,948   Valor COP: 344,465,214
+```
 
 ---
 
