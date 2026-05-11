@@ -248,3 +248,132 @@ def test_to_sec_ccy_eur_sec_missing_eur_usd():
     # Yahoo price is USD, sec_ccy is EUR, but eur_usd is None → step 2 returns None
     price = to_sec_ccy_price(100.0, "USD", "EUR", eur_usd=None, trm=4000.0, gbp_usd=1.25)
     assert price is None
+
+
+# ── Tests Task 4: collect_lots + run integration ──────────────────────────────
+
+def make_full_db():
+    """DB en memoria con 2 brokers, 2 monedas, un lote parcialmente vendido."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript("""
+        CREATE TABLE securities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            isin TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            currency TEXT NOT NULL
+        );
+        CREATE TABLE transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            security_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            type TEXT NOT NULL,
+            broker TEXT NOT NULL,
+            quantity REAL NOT NULL,
+            price REAL,
+            currency TEXT NOT NULL,
+            total REAL,
+            fee REAL DEFAULT 0,
+            exchange TEXT,
+            notes TEXT,
+            source_file TEXT
+        );
+        CREATE TABLE lot_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sell_id INTEGER NOT NULL,
+            buy_id INTEGER NOT NULL,
+            quantity REAL NOT NULL
+        );
+        CREATE TABLE ticker_mappings (
+            isin TEXT NOT NULL,
+            exchange TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            currency TEXT NOT NULL,
+            source TEXT NOT NULL,
+            verified_at TEXT,
+            PRIMARY KEY (isin, exchange)
+        );
+        CREATE TABLE fx_rates (
+            date TEXT NOT NULL,
+            from_currency TEXT NOT NULL,
+            to_currency TEXT NOT NULL,
+            rate REAL NOT NULL,
+            PRIMARY KEY (date, from_currency, to_currency)
+        );
+
+        INSERT INTO securities VALUES (1, 'US0000000001', 'MSFT Test',   'stock', 'USD');
+        INSERT INTO securities VALUES (2, 'IE00000000EU', 'LVMH Test',   'stock', 'EUR');
+        INSERT INTO securities VALUES (3, 'COB00000001',  'BanCo Test',  'stock', 'COP');
+
+        -- fidelity: MSFT USD — buy 10, sell 4 → 6 remaining
+        INSERT INTO transactions VALUES (1, 1, '2024-01-15', 'buy',  'fidelity', 10, 300.0, 'USD', 3000.0, 0, 'XNAS', NULL, NULL);
+        INSERT INTO transactions VALUES (2, 1, '2024-06-01', 'sell', 'fidelity',  4, 380.0, 'USD', 1520.0, 0, 'XNAS', NULL, NULL);
+
+        -- scalable: LVMH EUR — buy 5 units
+        INSERT INTO transactions VALUES (3, 2, '2024-02-01', 'buy', 'scalable', 5, 800.0, 'EUR', 4000.0, 0, 'XPAR', NULL, NULL);
+
+        -- trii: BanCo COP — buy 100 units
+        INSERT INTO transactions VALUES (4, 3, '2024-03-01', 'buy', 'trii', 100, 5000.0, 'COP', 500000.0, 0, 'XBOG', NULL, NULL);
+
+        INSERT INTO ticker_mappings VALUES ('US0000000001', 'XNAS', 'MSFT', 'USD', 'manual', '2024-01-01');
+        INSERT INTO ticker_mappings VALUES ('IE00000000EU', 'XPAR', 'MC.PA', 'EUR', 'manual', '2024-01-01');
+
+        INSERT INTO fx_rates VALUES ('2024-01-15', 'USD', 'COP', 3900.0);
+        INSERT INTO fx_rates VALUES ('2024-01-15', 'EUR', 'USD', 1.08);
+        INSERT INTO fx_rates VALUES ('2024-02-01', 'USD', 'COP', 3950.0);
+        INSERT INTO fx_rates VALUES ('2024-02-01', 'EUR', 'USD', 1.09);
+        INSERT INTO fx_rates VALUES ('2024-03-01', 'USD', 'COP', 4000.0);
+        INSERT INTO fx_rates VALUES ('2024-12-31', 'USD', 'COP', 4380.0);
+        INSERT INTO fx_rates VALUES ('2024-12-31', 'EUR', 'USD', 1.10);
+    """)
+    return conn
+
+
+def test_collect_lots_by_broker_and_secccy(monkeypatch):
+    """run() agrupa lotes correctamente por broker → sec_ccy."""
+    import patrimonio
+    from datetime import date
+
+    monkeypatch.setattr(
+        patrimonio, "fetch_historical_prices",
+        lambda tickers, as_of: {t: (400.0, "USD") for t in tickers}
+    )
+
+    conn = make_full_db()
+    as_of = date(2024, 12, 31)
+
+    groups = patrimonio.collect_lots(conn, as_of)
+
+    # fidelity/USD: 1 lote (10 compradas, 4 vendidas → 6 restantes)
+    assert ("fidelity", "USD") in groups
+    fid_lots = groups[("fidelity", "USD")]
+    assert len(fid_lots) == 1
+    assert abs(fid_lots[0]["qty"] - 6.0) < 1e-6
+
+    # scalable/EUR: 1 lote
+    assert ("scalable", "EUR") in groups
+    assert len(groups[("scalable", "EUR")]) == 1
+
+    # trii/COP: 1 lote
+    assert ("trii", "COP") in groups
+    assert len(groups[("trii", "COP")]) == 1
+
+
+def test_cost_usd_prorrateado(monkeypatch):
+    """Lote parcial: costo = price_usd * qty_remaining (no total original)."""
+    import patrimonio
+    from datetime import date
+
+    monkeypatch.setattr(
+        patrimonio, "fetch_historical_prices",
+        lambda tickers, as_of: {t: (400.0, "USD") for t in tickers}
+    )
+
+    conn = make_full_db()
+    groups = patrimonio.collect_lots(conn, date(2024, 12, 31))
+
+    lot = groups[("fidelity", "USD")][0]
+    # price_usd = 3000/10 = 300; qty_remaining = 6; cost_usd = 300*6 = 1800
+    assert abs(lot["cost_sec"] - 1800.0) < 0.01
+    assert abs(lot["cost_cop"] - 1800.0 * 3900.0) < 1  # TRM del 2024-01-15
