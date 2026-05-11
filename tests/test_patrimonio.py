@@ -180,3 +180,47 @@ def test_calc_lot_costs_none_price_usd():
     )
     assert result["cost_sec"] is None
     assert result["cost_cop"] is None
+
+
+# ── Tests Task 3: to_sec_ccy_price ───────────────────────────────────────────
+
+def test_to_sec_ccy_usd_yahoo_usd_sec():
+    """Yahoo USD → sec USD: directo."""
+    from patrimonio import to_sec_ccy_price
+    price = to_sec_ccy_price(100.0, "USD", "USD", eur_usd=1.10, trm=4000.0, gbp_usd=1.25)
+    assert abs(price - 100.0) < 0.01
+
+
+def test_to_sec_ccy_eur_yahoo_eur_sec():
+    """Yahoo EUR → sec EUR: directo."""
+    from patrimonio import to_sec_ccy_price
+    price = to_sec_ccy_price(90.0, "EUR", "EUR", eur_usd=1.10, trm=4000.0, gbp_usd=1.25)
+    assert abs(price - 90.0) < 0.01
+
+
+def test_to_sec_ccy_gbp_yahoo_usd_sec():
+    """Yahoo GBP → USD: × gbp_usd."""
+    from patrimonio import to_sec_ccy_price
+    price = to_sec_ccy_price(80.0, "GBP", "USD", eur_usd=1.10, trm=4000.0, gbp_usd=1.25)
+    assert abs(price - 100.0) < 0.01   # 80 * 1.25
+
+
+def test_to_sec_ccy_gbp_pence_usd_sec():
+    """Yahoo GBp (peniques) → USD: ÷100 × gbp_usd."""
+    from patrimonio import to_sec_ccy_price
+    price = to_sec_ccy_price(8000.0, "GBp", "USD", eur_usd=1.10, trm=4000.0, gbp_usd=1.25)
+    assert abs(price - 100.0) < 0.01   # 8000/100 * 1.25
+
+
+def test_to_sec_ccy_usd_yahoo_cop_sec():
+    """Yahoo USD → COP: × TRM."""
+    from patrimonio import to_sec_ccy_price
+    price = to_sec_ccy_price(100.0, "USD", "COP", eur_usd=1.10, trm=4000.0, gbp_usd=1.25)
+    assert abs(price - 400_000.0) < 1
+
+
+def test_to_sec_ccy_missing_gbp_usd():
+    """gbp_usd=None para ticker GBP → devuelve None."""
+    from patrimonio import to_sec_ccy_price
+    price = to_sec_ccy_price(80.0, "GBP", "USD", eur_usd=1.10, trm=4000.0, gbp_usd=None)
+    assert price is None
