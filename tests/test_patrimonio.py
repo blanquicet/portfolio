@@ -224,3 +224,27 @@ def test_to_sec_ccy_missing_gbp_usd():
     from patrimonio import to_sec_ccy_price
     price = to_sec_ccy_price(80.0, "GBP", "USD", eur_usd=1.10, trm=4000.0, gbp_usd=None)
     assert price is None
+
+
+def test_to_sec_ccy_unknown_yahoo_ccy_treated_as_usd(capsys):
+    """Unknown yahoo_ccy: warning to stderr, treated as USD."""
+    from patrimonio import to_sec_ccy_price
+    price = to_sec_ccy_price(100.0, "CHF", "USD", eur_usd=1.10, trm=4000.0, gbp_usd=1.25)
+    assert abs(price - 100.0) < 0.01  # treated as USD
+    captured = capsys.readouterr()
+    assert "CHF" in captured.err or "no soportada" in captured.err
+
+
+def test_to_sec_ccy_cop_sec_missing_trm():
+    """sec_ccy=COP, trm=None → returns None."""
+    from patrimonio import to_sec_ccy_price
+    price = to_sec_ccy_price(100.0, "USD", "COP", eur_usd=1.10, trm=None, gbp_usd=1.25)
+    assert price is None
+
+
+def test_to_sec_ccy_eur_sec_missing_eur_usd():
+    """Step 2 EUR→USD None: eur_usd=None in step 2 → None."""
+    from patrimonio import to_sec_ccy_price
+    # Yahoo price is USD, sec_ccy is EUR, but eur_usd is None → step 2 returns None
+    price = to_sec_ccy_price(100.0, "USD", "EUR", eur_usd=None, trm=4000.0, gbp_usd=1.25)
+    assert price is None

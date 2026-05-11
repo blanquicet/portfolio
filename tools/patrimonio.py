@@ -66,6 +66,8 @@ def to_sec_ccy_price(yahoo_price, yahoo_ccy, sec_ccy, eur_usd, trm, gbp_usd):
     Devuelve None si falta una tasa necesaria.
     """
     # Paso 1: yahoo → USD
+    if yahoo_ccy is None:
+        return None
     yc = yahoo_ccy.strip()
     if yc == "USD":
         price_usd = yahoo_price
@@ -82,7 +84,7 @@ def to_sec_ccy_price(yahoo_price, yahoo_ccy, sec_ccy, eur_usd, trm, gbp_usd):
             return None
         price_usd = yahoo_price / 100 * gbp_usd
     else:
-        print(f"  ⚠ to_sec_ccy_price: moneda Yahoo '{yahoo_ccy}' no soportada — tratando como USD",
+        print(f"  ⚠ to_sec_ccy_price: moneda Yahoo '{yc}' no soportada — tratando como USD",
               file=sys.stderr)
         price_usd = yahoo_price
 
@@ -136,6 +138,7 @@ def fetch_historical_prices(tickers, as_of):
             closes = raw["Close"]
             for t in tickers:
                 try:
+                    # yf.download(str) → Close is a Series; yf.download(list) → Close is a DataFrame
                     col  = closes[t] if len(tickers) > 1 else closes
                     last = col.dropna()
                     if not last.empty:
@@ -152,6 +155,8 @@ def fetch_historical_prices(tickers, as_of):
             ccy  = getattr(info, "currency", None) or "USD"
             result[t] = (result[t][0], ccy)
         except Exception:
-            result[t] = (result[t][0], "USD")  # fallback
+            print(f"  ⚠ fetch_historical_prices: no se pudo obtener moneda para {t}, asumiendo USD",
+                  file=sys.stderr)
+            result[t] = (result[t][0], "USD")
 
     return result
