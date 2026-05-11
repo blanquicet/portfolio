@@ -135,6 +135,12 @@ class FifoQueue:
                 for qty, price_usd, dt, src, _bid in self.lots
                 if qty > 1e-6]
 
+    def remaining_lots_with_buy_id(self):
+        """Return lots with qty > 0, including buy_id. Used by patrimonio.py."""
+        return [(qty, price_usd, dt, src, bid)
+                for qty, price_usd, dt, src, bid in self.lots
+                if qty > 1e-6]
+
     def avg_cost_usd(self):
         """
         Weighted average cost in USD of remaining lots.
@@ -157,7 +163,7 @@ class FifoQueue:
 # Build queues from DB
 # ──────────────────────────────────────────────────────────────────────────────
 
-def build_queues(conn, as_of_date=None):
+def build_queues(conn, as_of_date=None, broker=None):
     """
     Read all buy/vesting/sell transactions from the DB and return
     a dict {isin: FifoQueue} with FIFO state reflecting all sales.
@@ -167,6 +173,8 @@ def build_queues(conn, as_of_date=None):
 
     as_of_date: ISO string 'YYYY-MM-DD'. If given, only transactions
                 up to that date are included. Defaults to today.
+    broker: if given, only transactions from this broker are included.
+            Used by patrimonio.py to isolate lots per broker.
     """
     if as_of_date:
         date_clause = "AND t.date <= ?"
@@ -174,6 +182,12 @@ def build_queues(conn, as_of_date=None):
     else:
         date_clause = "AND t.date <= date('now')"
         params = []
+
+    if broker:
+        broker_clause = "AND t.broker = ?"
+        params.append(broker)
+    else:
+        broker_clause = ""
 
     rows = conn.execute(f"""
         SELECT
@@ -184,6 +198,7 @@ def build_queues(conn, as_of_date=None):
         JOIN securities s ON s.id = t.security_id
         WHERE t.type IN ('buy','vesting','sell','sell_to_cover','transfer_in','transfer_out')
           {date_clause}
+          {broker_clause}
         ORDER BY t.date, t.id
     """, params).fetchall()
 
