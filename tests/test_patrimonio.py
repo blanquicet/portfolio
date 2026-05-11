@@ -250,6 +250,23 @@ def test_to_sec_ccy_eur_sec_missing_eur_usd():
     assert price is None
 
 
+def test_to_sec_ccy_cop_yahoo_cop_sec():
+    """Yahoo COP → sec COP: price in COP stays in COP (divide by TRM, then multiply by TRM = identity)."""
+    from patrimonio import to_sec_ccy_price
+    # Yahoo price 5000 COP, sec_ccy=COP, TRM=4000
+    # Step 1: 5000 / 4000 = 1.25 USD
+    # Step 2: 1.25 * 4000 = 5000 COP
+    price = to_sec_ccy_price(5000.0, "COP", "COP", eur_usd=1.10, trm=4000.0, gbp_usd=1.25)
+    assert abs(price - 5000.0) < 0.01
+
+
+def test_to_sec_ccy_cop_yahoo_missing_trm():
+    """Yahoo COP with trm=None → returns None."""
+    from patrimonio import to_sec_ccy_price
+    price = to_sec_ccy_price(5000.0, "COP", "COP", eur_usd=1.10, trm=None, gbp_usd=1.25)
+    assert price is None
+
+
 # ── Tests Task 4: collect_lots + run integration ──────────────────────────────
 
 def make_full_db():

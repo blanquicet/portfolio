@@ -83,6 +83,10 @@ def to_sec_ccy_price(yahoo_price, yahoo_ccy, sec_ccy, eur_usd, trm, gbp_usd):
         if gbp_usd is None:
             return None
         price_usd = yahoo_price / 100 * gbp_usd
+    elif yc == "COP":
+        if trm is None:
+            return None
+        price_usd = yahoo_price / trm
     else:
         print(f"  ⚠ to_sec_ccy_price: moneda Yahoo '{yc}' no soportada — tratando como USD",
               file=sys.stderr)
@@ -216,19 +220,20 @@ def collect_lots(conn, as_of):
                 costs = calc_lot_costs(qty, price_usd, sec_ccy, trm_compra, eur_usd_compra)
 
                 lot = {
-                    "name":       name,
-                    "isin":       isin,
-                    "ticker":     ticker_map.get(isin),
-                    "qty":        qty,
-                    "price_usd":  price_usd,
-                    "buy_date":   buy_date,
-                    "sec_ccy":    sec_ccy,
-                    "broker":     broker,
-                    "cost_sec":   costs["cost_sec"],
-                    "cost_cop":   costs["cost_cop"],
-                    "price_asof": None,
-                    "val_sec":    None,
-                    "val_cop":    None,
+                    "name":        name,
+                    "isin":        isin,
+                    "ticker":      ticker_map.get(isin),
+                    "qty":         qty,
+                    "price_usd":   price_usd,
+                    "buy_date":    buy_date,
+                    "sec_ccy":     sec_ccy,
+                    "broker":      broker,
+                    "trm_compra":  trm_compra,
+                    "cost_sec":    costs["cost_sec"],
+                    "cost_cop":    costs["cost_cop"],
+                    "price_asof":  None,
+                    "val_sec":     None,
+                    "val_cop":     None,
                 }
                 groups.setdefault((broker, sec_ccy), []).append(lot)
 
@@ -338,9 +343,7 @@ def _print_report(groups, as_of_str, trm_asof, eur_usd_asof):
         for lot in sorted(lots, key=lambda x: x["buy_date"]):
             trm_cmp = None
             if not is_cop:
-                cost_usd = lot["price_usd"] * lot["qty"] if lot["price_usd"] else None
-                if lot["cost_cop"] is not None and cost_usd and cost_usd > 0:
-                    trm_cmp = lot["cost_cop"] / cost_usd
+                trm_cmp = lot.get("trm_compra")
 
             if lot["cost_sec"] is not None:
                 sub_cost_sec += lot["cost_sec"]
@@ -403,7 +406,11 @@ if __name__ == "__main__":
     as_of = None
 
     if "--as-of" in args:
-        idx   = args.index("--as-of")
+        idx = args.index("--as-of")
+        if idx + 1 >= len(args):
+            print("Error: --as-of requiere una fecha (YYYY-MM-DD)")
+            print("Uso: python3 tools/patrimonio.py --as-of YYYY-MM-DD")
+            sys.exit(1)
         as_of = date.fromisoformat(args[idx + 1])
     else:
         year_arg = next((a for a in args if a.isdigit() and len(a) == 4), None)
