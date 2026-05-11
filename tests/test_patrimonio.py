@@ -169,3 +169,14 @@ def test_calc_lot_costs_missing_eur_usd():
     )
     assert result["cost_sec"] is None
     assert result["cost_cop"] is not None   # cost_cop = cost_usd * TRM, no depende de EUR/USD
+
+
+def test_calc_lot_costs_none_price_usd():
+    """price_usd=None (FX de compra faltante) → ambos campos None, sin crash."""
+    from patrimonio import calc_lot_costs
+    result = calc_lot_costs(
+        qty=10.0, price_usd=None, sec_ccy="USD",
+        trm_compra=4000.0, eur_usd_compra=1.10
+    )
+    assert result["cost_sec"] is None
+    assert result["cost_cop"] is None

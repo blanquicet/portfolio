@@ -28,7 +28,11 @@ def calc_lot_costs(qty, price_usd, sec_ccy, trm_compra, eur_usd_compra):
 
     Returns:
         dict con 'cost_sec' (en sec_ccy) y 'cost_cop', ambos pueden ser None.
+        Si price_usd es None (FX de compra faltante), retorna {'cost_sec': None, 'cost_cop': None}.
     """
+    if price_usd is None:
+        return {"cost_sec": None, "cost_cop": None}
+
     cost_usd = price_usd * qty
 
     if sec_ccy == "USD":
@@ -36,12 +40,12 @@ def calc_lot_costs(qty, price_usd, sec_ccy, trm_compra, eur_usd_compra):
         cost_cop = cost_usd * trm_compra if trm_compra is not None else None
 
     elif sec_ccy == "EUR":
-        cost_sec = cost_usd / eur_usd_compra if eur_usd_compra else None
+        cost_sec = cost_usd / eur_usd_compra if eur_usd_compra is not None else None
         cost_cop = cost_usd * trm_compra if trm_compra is not None else None
 
     elif sec_ccy == "COP":
         cost_sec = cost_usd * trm_compra if trm_compra is not None else None
-        cost_cop = cost_sec
+        cost_cop = cost_sec  # COP security: native cost equals COP cost
 
     else:
         print(f"  ⚠ calc_lot_costs: sec_ccy '{sec_ccy}' no soportado — tratando como USD",
