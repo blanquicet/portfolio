@@ -393,11 +393,11 @@ def _print_report(groups, as_of_str, trm_asof, eur_usd_asof):
 
         if is_cop:
             print(f"  {'Instrumento':<36} {'Fecha cmp':>10}  {'Qty':>8}  "
-                  f"{'Costo COP':>15}  {'Precio 31d':>12}  {'Valor COP':>15}")
+                  f"{'Costo COP':>15}  {'Precio 31 Dic':>13}  {'Valor COP':>15}")
         else:
             print(f"  {'Instrumento':<36} {'Fecha cmp':>10}  {'Qty':>8}  "
                   f"{'Costo '+ccy_label:>12}  {'TRM cmp':>8}  {'Costo COP':>15}  "
-                  f"{'Precio 31d':>12}  {'Valor '+ccy_label:>12}  {'Valor COP':>15}")
+                  f"{'Precio 31 Dic':>13}  {'Valor '+ccy_label:>12}  {'Valor COP':>15}")
         print(f"  {'─'*(W-2)}")
 
         sub_cost_sec = 0.0
@@ -424,14 +424,14 @@ def _print_report(groups, as_of_str, trm_asof, eur_usd_asof):
             if is_cop:
                 print(f"  {lot['name']:<36} {lot['buy_date']:>10}  {lot['qty']:>8.3f}  "
                       f"{_fmt(lot['cost_sec'], 0, 15)}  "
-                      f"{_fmt(lot['price_asof'], 0, 12)}  "
+                      f"{_fmt(lot['price_asof'], 0, 13)}  "
                       f"{_fmt(lot['val_cop'], 0, 15)}")
             else:
                 print(f"  {lot['name']:<36} {lot['buy_date']:>10}  {lot['qty']:>8.3f}  "
                       f"{_fmt(lot['cost_sec'], 2, 12)}  "
                       f"{_fmt(trm_cmp, 0, 8)}  "
                       f"{_fmt(lot['cost_cop'], 0, 15)}  "
-                      f"{_fmt(lot['price_asof'], 2, 12)}  "
+                      f"{_fmt(lot['price_asof'], 2, 13)}  "
                       f"{_fmt(lot['val_sec'], 2, 12)}  "
                       f"{_fmt(lot['val_cop'], 0, 15)}")
 
