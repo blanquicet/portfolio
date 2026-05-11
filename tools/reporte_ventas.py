@@ -15,12 +15,12 @@ Fuentes FX:
   - EUR/COP: EUR/USD × TRM (derivado)
 
 Usage:
-    python3 tools/tax_report.py 2025              # tabla por lote FIFO (por defecto)
-    python3 tools/tax_report.py 2024              # otro año
-    python3 tools/tax_report.py 2025 --summary    # vista resumida por venta
-    python3 tools/tax_report.py 2025 --detail     # agrega detalle de lotes en modo summary
-    python3 tools/tax_report.py 2025 --largo      # solo ventas de largo plazo
-    python3 tools/tax_report.py 2025 --corto      # solo ventas de corto plazo
+    python3 tools/reporte_ventas.py 2025              # tabla por lote FIFO (por defecto)
+    python3 tools/reporte_ventas.py 2024              # otro año
+    python3 tools/reporte_ventas.py 2025 --summary    # vista resumida por venta
+    python3 tools/reporte_ventas.py 2025 --detail     # agrega detalle de lotes en modo summary
+    python3 tools/reporte_ventas.py 2025 --largo      # solo ventas de largo plazo
+    python3 tools/reporte_ventas.py 2025 --corto      # solo ventas de corto plazo
 """
 import sqlite3, sys, os
 from datetime import datetime
@@ -53,9 +53,9 @@ for arg in sys.argv[1:]:
         YEAR = int(arg)
 
 if YEAR is None:
-    print("Uso: python3 tools/tax_report.py <año> [--summary|--table] [--detail] [--largo] [--corto] [--show-stc]")
-    print("  Ej: python3 tools/tax_report.py 2025")
-    print("  Ej: python3 tools/tax_report.py 2025 --summary")
+    print("Uso: python3 tools/reporte_ventas.py <año> [--summary|--table] [--detail] [--largo] [--corto] [--show-stc]")
+    print("  Ej: python3 tools/reporte_ventas.py 2025")
+    print("  Ej: python3 tools/reporte_ventas.py 2025 --summary")
     sys.exit(1)
 
 DIAS_LARGO_PLAZO = 730  # umbral de temporalidad: > 730 días = largo plazo

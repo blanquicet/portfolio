@@ -13,7 +13,7 @@ Ejecuta el script de tax report para el año solicitado.
 
 2. Ejecuta:
 ```bash
-python3 tools/tax_report.py <año>
+python3 tools/reporte_ventas.py <año>
 ```
 
 3. Muestra el output completo al usuario sin resumir ni truncar.
