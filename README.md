@@ -50,8 +50,12 @@ El agente extrae los datos, resuelve los tickers automáticamente y los guarda e
 O directamente desde la terminal:
 
 ```bash
-# Snapshot con precios en tiempo real
-python3 tools/snapshot.py
+python3 tools/snapshot.py            # todos los brokers, valores en USD
+python3 tools/snapshot.py ibkr       # solo IBKR
+python3 tools/snapshot.py trii cop   # solo Trii, valores en COP
+```
+
+Muestra posiciones netas con precios en tiempo real (Yahoo Finance), costo base FIFO, P&L no realizado y % del portafolio.
 
 # Patrimonio histórico al 31-dic de un año (precios históricos de Yahoo Finance)
 python3 tools/patrimonio.py 2025
