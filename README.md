@@ -72,6 +72,19 @@ python3 tools/patrimonio.py 2025 --csv > patrimonio_2025.csv
 
 Muestra lotes abiertos por broker con costo histórico (TRM de compra) y valor de mercado al cierre del año (precios históricos de Yahoo Finance), todo en COP.
 
+### Dividendos recibidos
+
+- "¿Cuánto recibí en dividendos en 2025?"
+
+O directamente desde la terminal:
+
+```bash
+python3 tools/reporte_dividendos.py 2025
+python3 tools/reporte_dividendos.py 2025 --csv > dividendos_2025.csv
+```
+
+Muestra todos los dividendos del año con TRM del día de pago y valor en COP. Subtotales por broker y total anual.
+
 ### Reporte de impuestos / ventas
 
 - "Genera el reporte de renta para 2024"
