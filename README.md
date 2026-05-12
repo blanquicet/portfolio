@@ -40,7 +40,7 @@ El agente entiende lenguaje natural. No hay comandos exactos que memorizar — d
 
 El agente extrae los datos, resuelve los tickers automáticamente y los guarda en la base de datos.
 
-### Ver el portafolio actual
+### Snapshot del portafolio (hoy)
 
 - "Muéstrame mi portafolio"
 - "¿Cuánto vale mi portafolio hoy?"
@@ -57,11 +57,20 @@ python3 tools/snapshot.py trii cop   # solo Trii, valores en COP
 
 Muestra posiciones netas con precios en tiempo real (Yahoo Finance), costo base FIFO, P&L no realizado y % del portafolio.
 
-# Patrimonio histórico al 31-dic de un año (precios históricos de Yahoo Finance)
-python3 tools/patrimonio.py 2025
-python3 tools/patrimonio.py --as-of 2025-06-30   # fecha arbitraria
+### Patrimonio histórico al 31-dic
+
+- "¿Cuánto valía mi portafolio al cierre de 2025?"
+- "Genera el patrimonio para la declaración de renta 2025"
+
+O directamente desde la terminal:
+
+```bash
+python3 tools/patrimonio.py 2025                          # snapshot al 2025-12-31
+python3 tools/patrimonio.py --as-of 2025-06-30            # fecha arbitraria
 python3 tools/patrimonio.py 2025 --csv > patrimonio_2025.csv
 ```
+
+Muestra lotes abiertos por broker con costo histórico (TRM de compra) y valor de mercado al cierre del año (precios históricos de Yahoo Finance), todo en COP.
 
 ### Reporte de impuestos / ventas
 
