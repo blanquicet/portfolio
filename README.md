@@ -53,8 +53,9 @@ O directamente desde la terminal:
 # Snapshot con precios en tiempo real
 python3 tools/snapshot.py
 
-# Patrimonio histórico al 31-dic de un año (precios históricos de Yahoo)
+# Patrimonio histórico al 31-dic de un año (precios históricos de Yahoo Finance)
 python3 tools/patrimonio.py 2025
+python3 tools/patrimonio.py --as-of 2025-06-30   # fecha arbitraria
 python3 tools/patrimonio.py 2025 --csv > patrimonio_2025.csv
 ```
 
@@ -66,33 +67,15 @@ python3 tools/patrimonio.py 2025 --csv > patrimonio_2025.csv
 O directamente desde la terminal:
 
 ```bash
-# Vista tabla (una fila por lote FIFO)
-python3 tools/reporte_ventas.py 2025
-
-# Exportar a CSV para Excel
+python3 tools/reporte_ventas.py 2025              # tabla por lote FIFO (por defecto)
+python3 tools/reporte_ventas.py 2025 --summary    # vista resumida por venta
+python3 tools/reporte_ventas.py 2025 --detail     # agrega detalle de lotes en modo summary
+python3 tools/reporte_ventas.py 2025 --largo      # solo ventas largo plazo (> 730 días)
+python3 tools/reporte_ventas.py 2025 --corto      # solo ventas corto plazo (≤ 730 días)
 python3 tools/reporte_ventas.py 2025 --csv > reporte_ventas_2025.csv
 ```
 
-## Reporte de Ventas (`reporte_ventas.py`)
-
-El reporte está **hardcodeado para Colombia**:
-- **Ganancia Ocasional**: activos mantenidos más de 730 días
-- **Renta Ordinaria**: activos mantenidos 730 días o menos
-- TRM (tasa de cambio) desde Banco de la República
-- UVT desde DIAN (actualizado anualmente en `tools/reporte_ventas.py`)
-
-Opciones disponibles:
-
-```bash
-python3 tools/reporte_ventas.py 2025              # tabla por lote FIFO (por defecto)
-python3 tools/reporte_ventas.py 2025 --summary    # vista resumida por venta
-python3 tools/reporte_ventas.py 2025 --detail     # detalle de lotes en modo summary
-python3 tools/reporte_ventas.py 2025 --largo      # solo ventas largo plazo
-python3 tools/reporte_ventas.py 2025 --corto      # solo ventas corto plazo
-python3 tools/reporte_ventas.py 2025 --csv        # exportar CSV para Excel
-```
-
-El sistema clasifica cada venta — cuánto pagar lo determina la ley vigente.
+Hardcodeado para Colombia: Ganancia Ocasional (> 730 días) vs. Renta Ordinaria (≤ 730 días). TRM desde Banco de la República; UVT desde DIAN (actualizado anualmente en el script).
 
 ## Resolución de Tickers
 
